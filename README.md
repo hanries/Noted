@@ -65,8 +65,14 @@ Before storing important notes: test Pencil writing and palm rejection on a real
 
 ### Validation and remaining work
 
-Both Mac and iPad Simulator targets build successfully after the update. The ten portable model checks pass. Updated UI behavior has **not** been tested: CoreSimulator was unavailable in the execution environment, and launching the Mac app through computer use was blocked by automatic approval review with a usage-limit error. Previous prototype UI results do not validate these changes.
+Both Mac and iPad Simulator targets build successfully after the update. The ten portable model checks pass. The updated iPad UI was subsequently tested on an iPad Pro 11-inch (M5) simulator running iPadOS 26.4. CoreSimulator required shell access outside the sandbox and approximately five minutes for first-boot migration. Updated Mac UI behavior remains unverified; its earlier launch attempt was blocked by automatic approval review with a usage-limit error.
 
 Reload recovery depends on SwiftUI delivering a document replacement. It cannot guarantee recovery of a version already overwritten by a file provider, recover uncommitted input after a crash, or guarantee that every iCloud conflict is exposed. There is no verified coordinated concurrent-save strategy yet. Avoid simultaneous editing and keep exported backups until physical-device tests pass.
 
 Required manual checks: type then switch tools/pages and reopen; draw/erase at each zoom level; pan without creating ink; switch pages during input; undo/redo after moves and text changes; externally replace an open file and verify recovery and history reset; create an offline iCloud conflict and export both versions. Finally perform iPad → Mac → iPad using one iCloud file with Apple Pencil, a signed physical iPad build, and the same Apple Account. Verify every stroke, text edit, page order, interruption, and recovery copy on both devices. Lasso selection and production-scale rendering remain future work.
+
+### Simulator follow-up
+
+Verified in the installed build: document creation; Pencil-only mode rejecting simulated non-Pencil drawing; drawing after disabling Pencil-only; moving one stroke; creating and editing text; switching tools and pages without Done while preserving the text; adding a second page; erasing a stroke and restoring it with Undo; zooming to 150% and 200%; closing and reopening the notebook from Recents. A read of the saved JSON independently confirmed version 1, two pages, one remaining stroke on the first page, and the exact test text. The test notebook is local to the simulator.
+
+Open test issue: hand-mode drag and scroll attempts did not visibly move the zoomed page through the simulator automation input. This requires investigation with direct simulator interaction and physical touch before panning is considered verified. Redo was exercised but its intermediate visual state was not independently checked. Conflict recovery, externally replaced documents, physical Pencil pressure/palm rejection, and iCloud handoff remain unverified. No app source changes were made during this follow-up.
