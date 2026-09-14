@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 struct InkPoint: Codable, Equatable {
     var x: Double
@@ -78,3 +81,49 @@ struct Notebook: Codable, Equatable {
 }
 
 enum NotebookError: Error { case invalidFormat }
+
+// Viewport state never enters the document or undo history.
+struct NotebookViewport: Equatable {
+    var zoom: Double = 1
+    var offset: CGSize = .zero
+
+    func scale(in size: CGSize) -> Double {
+        max(0.1, min((size.width - 44) / 768, (size.height - 44) / 1024)) * zoom
+    }
+    func origin(in size: CGSize) -> CGPoint {
+        let s = scale(in: size)
+        return CGPoint(x: (size.width - 768 * s) / 2 + offset.width,
+                       y: (size.height - 1024 * s) / 2 + offset.height)
+    }
+    func pagePoint(_ point: InkPoint, in size: CGSize) -> InkPoint {
+        let o = origin(in: size), s = scale(in: size)
+        return InkPoint(x: (point.x - o.x) / s, y: (point.y - o.y) / s, pressure: point.pressure)
+    }
+    mutating func pan(_ delta: CGSize, in size: CGSize) {
+        offset.width += delta.width; offset.height += delta.height; clamp(in: size)
+    }
+    mutating func magnify(_ factor: Double, at anchor: CGPoint, in size: CGSize) {
+        guard factor.isFinite, factor > 0 else { return }
+        let p = pagePoint(InkPoint(x: anchor.x, y: anchor.y), in: size)
+        zoom = min(4, max(1, zoom * factor))
+        let s = scale(in: size)
+        offset = CGSize(width: anchor.x - p.x * s - (size.width - 768 * s) / 2,
+                        height: anchor.y - p.y * s - (size.height - 1024 * s) / 2)
+        clamp(in: size)
+    }
+    mutating func clamp(in size: CGSize) {
+        let s = scale(in: size)
+        let x = max(0, (768 * s - size.width) / 2 + 22)
+        let y = max(0, (1024 * s - size.height) / 2 + 22)
+        offset.width = min(x, max(-x, offset.width)); offset.height = min(y, max(-y, offset.height))
+    }
+}
+
+extension Notebook {
+    @discardableResult
+    mutating func appendContinuationPage(after pageID: UUID) -> Bool {
+        guard let last = pages.last, last.id == pageID,
+              !last.strokes.isEmpty || last.texts.contains(where: { !$0.text.isEmpty }) else { return false }
+        pages.append(NotePage(paper: last.paper)); return true
+    }
+}

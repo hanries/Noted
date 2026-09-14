@@ -1,78 +1,71 @@
 # Noted
 
-A free, native handwritten notebook prototype for iPad and Mac. No external dependencies, account system, advertising, payments, or backend. Written from scratch; no Stylus Labs code was copied.
+A free, native handwritten notebook app for iPad and Mac. No subscriptions, ads, Noted account, notebook limits, external dependencies, or hosted backend. Editable strokes and text are stored in a shared `.noted` file; PDF is not the source of truth. Still a prototype.
 
 ## Run
 
 Open `Noted.xcodeproj` in Xcode 26 or newer.
 
-- **Mac:** select the **Noted Mac** scheme and **My Mac**, then Run. Create a new document or open `Samples/Welcome.noted`.
-- **iPad Simulator:** select **Noted iPad**, choose an installed iPad simulator, then Run.
-- **Physical iPad:** choose your Apple development team under Signing & Capabilities, use a unique bundle identifier if required, select the connected iPad, and Run. Requires iPadOS 17+; Mac target requires macOS 14+.
+- **Mac:** select **Noted Mac** and **My Mac**. The Notebooks window provides New, Open, a starting paper choice, and recent files. Return to it through **File → Notebooks** (Shift–Command–1). Document windows support Mac mouse/trackpad input and standard File saving commands.
+- **iPad Simulator:** select **Noted iPad** and an installed iPad simulator. Turn off **Apple Pencil only** under Paper & input to draw using simulated touch input.
+- **Physical iPad:** use your Apple development team and a suitable bundle identifier in Signing & Capabilities, then run on the connected device. Requires iPadOS 17+; Mac requires macOS 14+.
 
-The initial document picker on Mac is normal: choose New Document or open a `.noted` file. Save with the system File menu. On iPad, the system Files browser handles notebook creation, opening, naming, and moving.
+On iPadOS 18+, Noted supplies a paper-themed launch screen. Apple's recent-file and Files browser remain available for opening, naming, moving, and sharing documents. iPadOS 17 retains the system launch interface. No iCloud account is required for local notebooks.
 
-## Prototype features
+## Write and navigate
 
-- Native input: Apple Pencil pressure and coalesced touch samples on iPad, mouse/trackpad on Mac.
-- Pen, translucent highlighter, whole-stroke eraser, and single-stroke selection/movement.
-- Add/edit/move/delete fixed-size text blocks (Text creates; Move selects).
-- Ruled, grid, and blank paper; page insertion, duplication, reordering, deletion.
-- Fifty-step in-session undo/redo using toolbar buttons.
-- Shared versioned JSON `.noted` format; document-based saving on both platforms.
-- Same file can be opened through an iCloud Drive folder selected by the user.
+- **Pen / Highlight:** capture editable strokes. Apple Pencil pressure and coalesced samples are supported on iPad.
+- **Erase:** remove whole strokes. **Move:** select and drag one stroke or text block. **Text:** tap to insert a text block; edits update the document as you type. Done closes the inspector. Text areas remain fixed at 300 × 90 page units.
+- **Two fingers on iPad:** drag to pan and pinch to zoom, without choosing a navigation tool. Pencil touches are excluded from navigation recognizers. If a finger drawing gesture becomes a two-finger navigation gesture, the unfinished edit is cancelled; navigation itself never enters undo history. Navigation waits while a Pencil stroke is active.
+- **Hand:** beside the pen tools, enables one-finger page dragging on iPad or mouse dragging on Mac. Selecting a writing tool exits Hand mode.
+- **Mac trackpad:** scroll to pan; pinch to zoom. Mouse-wheel scrolling also pans.
+- **Zoom controls:** beside the tools, from fit-to-window to 400%. Tap the percentage to fit/recenter. Panning is bounded so the page cannot be lost offscreen; a fitted page needs little or no panning.
+- **Pencil double-tap:** switches between Erase and the previously selected tool. Supported Pencil hardware is required. Noted leaves double-tap disabled when the system preference is Off; otherwise this app maps it to eraser switching.
+- **Undo / Redo:** toolbar history retains the last fifty in-session notebook snapshots. A document reload resets history to avoid applying stale snapshots to externally replaced content.
 
-On iPad, Pencil-only input is the default to avoid palm marks. To test using a finger or simulator mouse, turn off **Apple Pencil only** in the grid/paper menu. Choose a tool and draw on the paper. Select **Move** to reposition existing ink or text. Text changes update the document as you type; Done closes the inspector. System autosave still controls disk persistence. Use the magnifying glasses for 100–400% zoom relative to fit-to-window. Enable the hand tool to scroll a zoomed page; turn it off to write or select. Pinch zoom and simultaneous finger navigation while writing are not implemented.
+## Pages and templates
 
-## Sync scope — please read
+Use the sidebar **+** to choose a previewed **Ruled**, **Grid**, or **Blank** template for a new page. Paper & input → Page templates changes the current page's paper without moving or flattening its contents. Page duplication, reordering, and deletion remain in the notebook menu.
 
-This version relies on Apple's document APIs and a user-selected iCloud Drive location; it has no private CloudKit container. Save the document to an iCloud Drive folder visible in Files and Finder and open that same file on the second device. Both devices need Noted installed and the same Apple Account.
+**Keep a blank page ready** is enabled by default and can be disabled in Paper & input or the template chooser. When a completed edit adds content to the last page, Noted appends one empty page with the same paper. It keeps you on your current page. Further edits to that page do not create additional empty pages. Undo restores both the edit and its automatic page creation together. This is a paged editor, not an infinitely scrolling canvas; choose the next page in the sidebar when ready.
 
-**End-to-end two-device sync has not been verified.** Await upload/download and close the document on the first device before editing on the other. This prototype does not merge concurrent offline changes. **Recover file versions** exports the current notebook, retained reload copies, and any unresolved versions reported by Apple as separate editable files. It never marks conflicts resolved or replaces the original. This is a recovery aid, not a verified conflict-resolution engine. Keep backups of valuable notes. Cloud storage uses the user's existing iCloud quota; local files do not require iCloud.
+## Saving, handoff, and recovery
 
-## Format
+Use Apple's document controls to save locally or in an iCloud Drive folder shared between your devices. Both devices need Noted installed; iCloud Drive handoff requires the same Apple Account and uses its existing storage quota.
 
-`.noted` files are UTF-8 JSON, with version, title, and pages. Each page stores its paper type, UUID, editable strokes (points, pressure, width, color, highlighter flag), and positioned text blocks. Coordinates use a 768 × 1024 page. File decoding rejects unsupported versions, empty notebooks, duplicate page/object IDs, and invalid stroke geometry. Unsupported files are not silently rewritten.
+**On September 14, 2026, the user reported that the sequential iPad → Mac → iPad workflow works.** This is a user-reported handoff result, not verification of concurrent edits, offline conflicts, or interruption recovery. Wait for uploads/downloads and close the file on one device before editing on the other. Keep exported backups of valuable notes.
 
-The format is documented here, but still experimental and subject to explicit versioned migration. A PDF is not used as the editable source of truth.
+- **Export notebook copy** saves a separate editable `.noted` backup through the system exporter.
+- On an observed document reload, the previous in-memory notebook is retained and saved atomically under the app's local Application Support `Noted/Recovery` directory. A failure is reported; export the retained in-memory copy before closing.
+- **Recover file versions** exports the current notebook, retained reload copies, and unresolved conflict versions reported by Apple as separate files. It never replaces the source or marks system conflicts resolved. Check export filenames in the system dialog.
+- Saved recovery copies persist across launches. They are not automatically deleted or synced and can include notes from other notebooks opened by this app.
 
-## Checks
+There is **no custom sync engine, automatic conflict merging, or verified coordinated concurrent-save strategy**. Recovery depends on SwiftUI delivering a document replacement and Apple exposing conflict versions. It cannot guarantee recovery of a version already overwritten by a provider or uncommitted input lost in a crash. Conflict recovery remains unverified end to end.
 
-Run `./test-model.sh` for portable save/reopen, stroke selection/movement, and malformed-document checks. Build both schemes for UI compilation checks.
+## File format
 
-## Not included yet
+`.noted` is version 1 UTF-8 JSON with a title and pages. Each page stores a UUID, paper type, editable strokes (points, pressure, width, color, highlighter flag), and positioned text blocks. Coordinates use a 768 × 1024 page. Viewport zoom and pan are not stored in the document and do not change stroke coordinates.
 
-PDF import/export, pinch zoom, multi-stroke lasso, handwriting recognition, images, audio, live collaboration, automatic conflict merging, production-scale rendering optimization, custom app icon, and an open-source license decision.
+Decoding rejects unsupported versions, empty notebooks, duplicate page/object IDs, and invalid stroke geometry. Unsupported files are not silently rewritten. The new navigation and automatic pages retain the existing format; no migration is required. `Samples/Welcome.noted` is an example notebook.
 
-Before storing important notes: test Pencil writing and palm rejection on a real iPad, save/reopen and interruption recovery, iCloud switching between devices, conflict handling, and long notebooks. The first canvas fits one page to the window; text blocks have a fixed 300 × 90 area.
+## Validation
 
-## Next milestone
+Run `./test-model.sh`. All **23 checks** passed after the September 14 changes: encoding/decoding, selection geometry, movement, malformed files, anchored zoom, pan bounds, coordinate/pressure mapping, zoom limits, and automatic-page creation/inheritance/round-trip behavior. Both **Noted Mac** and **Noted iPad** simulator builds passed with signing disabled.
 
-1. Validate one notebook moving iPad → Mac → iPad with edits intact.
-2. Add explicit sync/conflict recovery and backup/export.
-3. Improve writing with zoom, panning, and multi-stroke selection.
-4. Add PDF annotation after the core document workflow is reliable.
+Earlier simulator UI testing on iPad Pro 11-inch (M5), iPadOS 26.4 verified creation, Pencil-only rejection of simulated non-Pencil input, drawing with that setting disabled, moving a stroke, text persistence across tool/page switches, adding a page, erasing and Undo, zoom buttons, and close/reopen. The saved JSON independently confirmed the expected content. That testing predates the new native navigation surface and launch UI.
 
-## September 10 reliability update
+**September 14 visual checks remain pending:** computer control found the Mac locked. The new home screens, gesture recognizers, and template picker have compiled but have not been visually or interactively verified. Model tests do not substitute for native touch or Pencil tests.
 
-- Text edits enter the document immediately, avoiding draft loss when changing pages or tools.
-- Beginning a selection clears the previous drag targets, preventing an old selected stroke from moving with newly selected text.
-- Completed drawing/erasing gestures are attached to their original page, including when page selection changes. Pending gestures finish before history operations and when the scene becomes inactive.
-- Each document decode has a fresh in-memory identity. A reload clears stale undo/redo and gesture state, even when the newly loaded notebook has identical content.
-- On an observed reload, the previous notebook is retained in memory and written atomically into the app's local Application Support `Noted/Recovery` directory. These recovery copies persist across launches and are included by **Recover file versions**. They are not automatically deleted or synced, and may contain private notes from other notebooks opened by this app. A failure to save a recovery copy is reported; export the in-memory copy before closing.
-- **Export notebook copy** creates a separate editable backup using the system exporter. Recovery exports do not resolve system conflicts. Export filenames should be checked in the system dialog.
-- Zoom buttons and an explicit hand/scroll mode provide navigation on both platforms. Pencil-only remains the default; native touch capture tracks one accepted touch and supports multiple simultaneous touches so rejected fingers do not occupy the sole touch slot.
+### Next device checks
 
-### Validation and remaining work
+1. With Pen selected and Pencil-only enabled, use two fingers to pan at 200% and pinch around a visible stroke. Write afterward and verify the stroke appears under the Pencil tip.
+2. Turn off Pencil-only, begin a finger stroke, then put down a second finger and navigate. The unfinished mark should disappear and no stray ink/text or extra page should be saved. Lift both fingers before writing again.
+3. Select Hand and drag with one finger. Verify Mac mouse dragging, trackpad scroll, and pinch. Resize/rotate and check page bounds and drawing coordinates.
+4. Double-tap a supported Pencil to erase, then double-tap back. Check the system Off setting and physical pressure/palm rejection.
+5. Write on the last page and verify exactly one same-template spare page. Undo/Redo the edit, save/reopen, and test with automatic pages disabled.
+6. Test Mac home New/Open/Recent, iPad launch, all three paper previews, and template changes preserving content.
+7. Externally replace an open test notebook, verify history reset and exported recovery copies, then test offline iCloud conflicts without risking valuable notes.
 
-Both Mac and iPad Simulator targets build successfully after the update. The ten portable model checks pass. The updated iPad UI was subsequently tested on an iPad Pro 11-inch (M5) simulator running iPadOS 26.4. CoreSimulator required shell access outside the sandbox and approximately five minutes for first-boot migration. Updated Mac UI behavior remains unverified; its earlier launch attempt was blocked by automatic approval review with a usage-limit error.
+## Future work
 
-Reload recovery depends on SwiftUI delivering a document replacement. It cannot guarantee recovery of a version already overwritten by a file provider, recover uncommitted input after a crash, or guarantee that every iCloud conflict is exposed. There is no verified coordinated concurrent-save strategy yet. Avoid simultaneous editing and keep exported backups until physical-device tests pass.
-
-Required manual checks: type then switch tools/pages and reopen; draw/erase at each zoom level; pan without creating ink; switch pages during input; undo/redo after moves and text changes; externally replace an open file and verify recovery and history reset; create an offline iCloud conflict and export both versions. Finally perform iPad → Mac → iPad using one iCloud file with Apple Pencil, a signed physical iPad build, and the same Apple Account. Verify every stroke, text edit, page order, interruption, and recovery copy on both devices. Lasso selection and production-scale rendering remain future work.
-
-### Simulator follow-up
-
-Verified in the installed build: document creation; Pencil-only mode rejecting simulated non-Pencil drawing; drawing after disabling Pencil-only; moving one stroke; creating and editing text; switching tools and pages without Done while preserving the text; adding a second page; erasing a stroke and restoring it with Undo; zooming to 150% and 200%; closing and reopening the notebook from Recents. A read of the saved JSON independently confirmed version 1, two pages, one remaining stroke on the first page, and the exact test text. The test notebook is local to the simulator.
-
-Open test issue: hand-mode drag and scroll attempts did not visibly move the zoomed page through the simulator automation input. This requires investigation with direct simulator interaction and physical touch before panning is considered verified. Redo was exercised but its intermediate visual state was not independently checked. Conflict recovery, externally replaced documents, physical Pencil pressure/palm rejection, and iCloud handoff remain unverified. No app source changes were made during this follow-up.
+Multi-stroke lasso, more page templates, continuous multi-page scrolling, PDF import/export, handwriting recognition, images, audio, conflict-resolution UX, production-scale rendering optimization, custom app icon, and an open-source license decision. No Stylus Labs code was copied.

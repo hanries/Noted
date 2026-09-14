@@ -16,7 +16,13 @@ private enum EditorTool: String, CaseIterable {
 struct NotebookEditor: View {
     @Binding var document: NotebookDocument
     var fileURL: URL?
-    @State private var zoom = 1.0
+    @State private var viewport = NotebookViewport()
+    @State private var canvasSize = CGSize(width: 768, height: 1024)
+    @State private var previousWritingTool: EditorTool = .pen
+    @AppStorage("automaticallyAddPages") private var automaticallyAddPages = true
+    @State private var showTemplates = false
+    @State private var templateForNewPage = false
+    private var zoom: Double { viewport.zoom }
     @State private var panMode = false
     @State private var recoveryCopies: [NotebookDocument] = []
     @State private var exportCopies: [NotebookDocument] = []
@@ -91,40 +97,17 @@ struct NotebookEditor: View {
                 tools.padding(.horizontal, 18).padding(.vertical, 12)
                 Divider()
                 GeometryReader { proxy in
-                    let scale = max(0.1, min((proxy.size.width - 44) / 768, (proxy.size.height - 44) / 1024)) * zoom
-                    ScrollView([.horizontal, .vertical]) {
-                      ZStack {
-                        Color(red: 0.92, green: 0.93, blue: 0.91)
-                        ZStack(alignment: .topLeading) {
-                            PaperCanvas(page: page, pending: pending, selection: selectedStroke, erased: erasedIDs)
-                            PointerSurface(pencilOnly: pencilOnly,
-                                began: { begin(normalize($0, scale)) },
-                                moved: { move(normalize($0, scale)) }, ended: finish)
-                                .allowsHitTesting(!panMode)
-                            if let id = selectedText, let card = page.texts.first(where: { $0.id == id }) {
-                                RoundedRectangle(cornerRadius: 4).stroke(accent, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
-                                    .frame(width: 310 * scale, height: 100 * scale)
-                                    .position(x: (card.x + 150) * scale, y: (card.y + 45) * scale)
-                                    .allowsHitTesting(false)
-                            }
+                    notebookCanvas(size: proxy.size)
+                        .onAppear { canvasSize = proxy.size }
+                        .onChange(of: proxy.size) { _, size in
+                            finish(false); canvasSize = size; viewport.clamp(in: size)
                         }
-                        .frame(width: 768 * scale, height: 1024 * scale)
-                        .clipped()
-                        .shadow(color: .black.opacity(0.09), radius: 12, y: 5)
-                      }.frame(minWidth: proxy.size.width, minHeight: proxy.size.height)
-                    }.scrollDisabled(!panMode)
                 }
                 if selectedText != nil { textInspector }
                 HStack {
-                    Button { clearSelection(); panMode.toggle() } label: {
-                        Image(systemName: panMode ? "hand.draw.fill" : "hand.draw")
-                    }.accessibilityLabel("Pan page")
-                    Button { zoom = max(1, zoom - 0.5) } label: { Image(systemName: "minus.magnifyingglass") }.disabled(zoom <= 1)
-                    Button("\(Int(zoom * 100))%") { zoom = 1 }
-                    Button { zoom = min(4, zoom + 0.5) } label: { Image(systemName: "plus.magnifyingglass") }.disabled(zoom >= 4)
                     Text("PAGE \(pageIndex + 1) OF \(document.notebook.pages.count)")
                     Spacer()
-                    Text(tool == .select ? "Drag ink or text to move it" : tool == .text ? "Tap the page to add text" : "\(tool.rawValue) · \(page.paper.rawValue) paper")
+                    Text(panMode ? "Drag to move the page" : tool == .select ? "Drag ink or text to move it" : tool == .text ? "Tap the page to add text" : "\(tool.rawValue) · \(page.paper.rawValue) paper")
                     Spacer()
                     Button { showHelp = true } label: { Image(systemName: "questionmark.circle") }
                         .buttonStyle(.plain).accessibilityLabel("Notebook help")
@@ -172,7 +155,7 @@ struct NotebookEditor: View {
             if case .failure(let error) = result { recoveryMessage = error.localizedDescription; showRecovery = true }
         }
         .alert("File recovery", isPresented: $showRecovery) { Button("OK", role: .cancel) {} } message: { Text(recoveryMessage) }
-        .onChange(of: selectedPage) { _, _ in clearSelection() }
+        .onChange(of: selectedPage) { _, _ in clearSelection(); viewport = NotebookViewport() }
         .onChange(of: tool) { _, _ in clearSelection() }
         .alert("Delete this page?", isPresented: $showDelete) {
             Button("Delete", role: .destructive) {
@@ -190,28 +173,120 @@ struct NotebookEditor: View {
             Button("Cancel", role: .cancel) { }
         } message: { Text("This changes the title inside the notebook. Rename its file separately in Files or Finder.") }
         .sheet(isPresented: $showHelp) { helpView }
+        .sheet(isPresented: $showTemplates) { templatePicker }
+    }
+
+    private func notebookCanvas(size: CGSize) -> some View {
+        let scale = viewport.scale(in: size)
+        let origin = viewport.origin(in: size)
+        return ZStack(alignment: .topLeading) {
+            Color(red: 0.92, green: 0.93, blue: 0.91)
+            ZStack(alignment: .topLeading) {
+                PaperCanvas(page: page, pending: pending, selection: selectedStroke, erased: erasedIDs)
+                if let id = selectedText, let card = page.texts.first(where: { $0.id == id }) {
+                    RoundedRectangle(cornerRadius: 4).stroke(accent, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                        .frame(width: 310 * scale, height: 100 * scale)
+                        .position(x: (card.x + 150) * scale, y: (card.y + 45) * scale)
+                }
+            }
+            .frame(width: 768 * scale, height: 1024 * scale)
+            .clipped().shadow(color: .black.opacity(0.09), radius: 12, y: 5)
+            .offset(x: origin.x, y: origin.y).allowsHitTesting(false)
+            PointerSurface(pencilOnly: pencilOnly, panMode: panMode,
+                began: { begin(viewport.pagePoint($0, in: size)) },
+                moved: {
+                    let p = viewport.pagePoint($0, in: size)
+                    move(InkPoint(x: min(768, max(0, p.x)), y: min(1024, max(0, p.y)), pressure: p.pressure))
+                }, ended: finish,
+                panned: { viewport.pan($0, in: size) },
+                magnified: { viewport.magnify($0, at: $1, in: size) },
+                pencilTapped: {
+                    clearSelection(); panMode = false
+                    if tool == .eraser { tool = previousWritingTool }
+                    else { previousWritingTool = tool; tool = .eraser }
+                })
+        }.frame(width: size.width, height: size.height).clipped()
+    }
+    private var zoomControls: some View {
+        HStack(spacing: 2) {
+            Button { changeZoom(1 / 1.25) } label: { Image(systemName: "minus.magnifyingglass").frame(width: 32, height: 42) }
+                .disabled(zoom <= 1).accessibilityLabel("Zoom out")
+            Button("\(Int((zoom * 100).rounded()))%") { finish(false); viewport = NotebookViewport() }
+                .font(.system(size: 11, weight: .medium, design: .monospaced))
+                .frame(minWidth: 42, minHeight: 42).help("Fit page")
+            Button { changeZoom(1.25) } label: { Image(systemName: "plus.magnifyingglass").frame(width: 32, height: 42) }
+                .disabled(zoom >= 4).accessibilityLabel("Zoom in")
+        }.buttonStyle(.plain)
+    }
+    private func changeZoom(_ factor: Double) {
+        finish(false)
+        viewport.magnify(factor, at: CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2), in: canvasSize)
+    }
+    private var templatePicker: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(templateForNewPage ? "A little more space." : "Choose your paper.")
+                        .font(.system(size: 26, weight: .medium, design: .serif))
+                    Text(templateForNewPage ? "Add a page after this one." : "Your writing stays exactly where it is.")
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("Done") { showTemplates = false }
+            }
+            HStack(spacing: 16) {
+                ForEach(Paper.allCases, id: \.self) { paper in
+                    Button {
+                        remember()
+                        if templateForNewPage {
+                            let new = NotePage(paper: paper)
+                            document.notebook.pages.insert(new, at: pageIndex + 1); selectedPage = new.id
+                        } else { document.notebook.pages[pageIndex].paper = paper }
+                        showTemplates = false
+                    } label: {
+                        VStack(spacing: 12) {
+                            PaperCanvas(page: NotePage(paper: paper), pending: nil, selection: nil, erased: [])
+                                .frame(width: 115, height: 154)
+                                .clipShape(RoundedRectangle(cornerRadius: 8))
+                                .overlay(RoundedRectangle(cornerRadius: 8).stroke(accent.opacity(0.25)))
+                            Text(paper.rawValue).font(.headline)
+                        }.padding(8)
+                    }.buttonStyle(.plain).accessibilityLabel("\(paper.rawValue) template")
+                }
+            }
+            Toggle("Keep a blank page ready", isOn: $automaticallyAddPages)
+            Text("When you write on the last page, Noted adds one blank page with the same paper. You stay on your current page.")
+                .font(.callout).foregroundStyle(.secondary)
+        }.padding(28).frame(idealWidth: 510).tint(accent)
     }
 
     private var tools: some View {
         ViewThatFits(in: .horizontal) {
-            HStack(spacing: 16) { toolPicker; inkControls; Spacer(minLength: 4); pageControls }
+            HStack(spacing: 16) { toolPicker; inkControls; Spacer(minLength: 4); zoomControls; pageControls }
             VStack(spacing: 12) {
                 HStack { toolPicker; Spacer(); historyControls }
-                HStack { inkControls; Spacer(); paperPicker }
+                HStack { inkControls; Spacer(); zoomControls; paperPicker }
             }
         }
     }
     private var toolPicker: some View {
         HStack(spacing: 4) {
             ForEach(EditorTool.allCases, id: \.self) { item in
-                Button { tool = item } label: {
+                Button { clearSelection(); panMode = false; tool = item } label: {
                     Image(systemName: item.symbol).font(.system(size: 16))
-                        .frame(width: 36, height: 34)
-                        .foregroundStyle(tool == item ? .white : accent)
-                        .background(tool == item ? accent : .clear, in: RoundedRectangle(cornerRadius: 8))
+                        .frame(width: 42, height: 42)
+                        .foregroundStyle(tool == item && !panMode ? .white : accent)
+                        .background(tool == item && !panMode ? accent : .clear, in: RoundedRectangle(cornerRadius: 8))
                 }.buttonStyle(.plain).help(item.rawValue).accessibilityLabel(item.rawValue)
-                    .accessibilityAddTraits(tool == item ? [.isSelected] : [])
+                    .accessibilityAddTraits(tool == item && !panMode ? [.isSelected] : [])
             }
+            Button { clearSelection(); panMode.toggle() } label: {
+                Image(systemName: "hand.draw").font(.system(size: 17))
+                    .frame(width: 42, height: 42)
+                    .foregroundStyle(panMode ? .white : accent)
+                    .background(panMode ? accent : .clear, in: RoundedRectangle(cornerRadius: 8))
+            }.buttonStyle(.plain).help("Hand · drag the page").accessibilityLabel("Hand")
+                .accessibilityAddTraits(panMode ? [.isSelected] : [])
         }
     }
     private var inkControls: some View {
@@ -240,14 +315,13 @@ struct NotebookEditor: View {
     }
     private var paperPicker: some View {
         Menu {
-            ForEach(Paper.allCases, id: \.self) { paper in
-                Button(paper.rawValue) { remember(); document.notebook.pages[pageIndex].paper = paper }
-            }
+            Button("Page templates…") { templateForNewPage = false; showTemplates = true }
+            Toggle("Keep a blank page ready", isOn: $automaticallyAddPages)
             #if os(iOS)
             Divider()
             Toggle("Apple Pencil only", isOn: $pencilOnly)
             #endif
-        } label: { Image(systemName: "square.grid.3x3") }.menuStyle(.borderlessButton).fixedSize().help("Paper & input")
+        } label: { Image(systemName: "square.grid.3x3") }.menuStyle(.borderlessButton).fixedSize().help("Paper & input").accessibilityLabel("Paper and input")
     }
     private var textInspector: some View {
         HStack(spacing: 12) {
@@ -265,9 +339,9 @@ struct NotebookEditor: View {
             Text("Make yourself a little space.").font(.system(size: 28, weight: .medium, design: .serif))
             Text("Noted · First prototype").font(.subheadline).foregroundStyle(.secondary)
             Label("Write on iPad. Keep editing on Mac.", systemImage: "pencil.and.outline")
-            Text("Pen and Highlight draw; Erase removes whole strokes. Move lets you select and drag ink or text. Text edits update immediately. Use the magnifying glasses to zoom and the hand tool to scroll the page. Choose Text, then tap the paper to add a text block. On iPad, Apple Pencil is enabled by default; switch off Apple Pencil only in the paper menu to use a finger.")
+            Text("Pen and Highlight draw; Erase removes whole strokes. Move lets you select and drag ink or text. Text edits update immediately. Use two fingers to pan or pinch to zoom at any time. The hand tool enables one-finger dragging. On Mac, scroll or pinch the trackpad to navigate. Double-tap a supported Apple Pencil to switch between eraser and your writing tool (unless disabled in system settings). Choose Text, then tap the paper to add a text block. On iPad, Apple Pencil is enabled by default; switch off Apple Pencil only in the paper menu to use a finger.")
             Label("One editable .noted file", systemImage: "doc.badge.arrow.up")
-            Text("Use the system document controls to save, open, or move your notebook. Save in iCloud Drive to share the same file between your iPad and Mac. Both devices need the app and the same Apple Account. Wait for iCloud to finish before switching devices; use Recover file versions to export system-reported conflicts and retained reload copies. Conflicts are left unresolved; automatic merging and end-to-end sync have not been verified.")
+            Text("Use the system document controls to save, open, or move your notebook. Save in iCloud Drive to share the same file between your iPad and Mac. Both devices need the app and the same Apple Account. Wait for iCloud to finish before switching devices; use Recover file versions to export system-reported conflicts and retained reload copies. Conflicts are left unresolved; automatic conflict merging is not implemented. A sequential handoff has been reported working; concurrent editing and recovery still need testing.")
             Text("No account with Noted, ads, subscriptions, or hosted backend. iCloud storage limits still apply. PDF import/export and handwriting recognition are not included yet.")
                 .font(.callout).foregroundStyle(.secondary)
             Button("Back to my notebook") { showHelp = false }.buttonStyle(.borderedProminent)
@@ -318,10 +392,8 @@ struct NotebookEditor: View {
         }
     }
 
-    private func normalize(_ p: InkPoint, _ scale: Double) -> InkPoint {
-        InkPoint(x: max(0, min(768, p.x/scale)), y: max(0, min(1024, p.y/scale)), pressure: p.pressure)
-    }
     private func begin(_ p: InkPoint) {
+        guard (0...768).contains(p.x), (0...1024).contains(p.y) else { return }
         clearSelection(); gestureBefore = document.notebook; gesturePage = page.id; startPoint = p
         switch tool {
         case .pen, .highlighter:
@@ -366,19 +438,23 @@ struct NotebookEditor: View {
     private func finish(_ cancelled: Bool) {
         guard gestureBefore != nil else { return }
         if cancelled {
-            if let gestureBefore { document.notebook = gestureBefore }
+            if let gestureBefore { document.notebook = gestureBefore }; selectedStroke = nil; selectedText = nil
         } else {
             if let index = document.notebook.pages.firstIndex(where: { $0.id == gesturePage }) {
                 if let pending { document.notebook.pages[index].strokes.append(pending) }
                 document.notebook.pages[index].strokes.removeAll { erasedIDs.contains($0.id) }
             }
-            if let gestureBefore, gestureBefore != document.notebook { pushUndo(gestureBefore) }
+            if let gestureBefore, gestureBefore != document.notebook {
+                if automaticallyAddPages, let gesturePage { document.notebook.appendContinuationPage(after: gesturePage) }
+                pushUndo(gestureBefore)
+            }
         }
         pending = nil; startPoint = nil; originalStroke = nil; originalText = nil; gestureBefore = nil; erasedIDs = []
     }
     private func applyText() {
         guard let i = page.texts.firstIndex(where: { $0.id == selectedText }), page.texts[i].text != textDraft else { return }
         remember(); document.notebook.pages[pageIndex].texts[i].text = textDraft
+        if automaticallyAddPages { document.notebook.appendContinuationPage(after: page.id) }
     }
     private func clearSelection() {
         finish(false)
@@ -404,8 +480,7 @@ struct NotebookEditor: View {
         if !book.pages.contains(where: { $0.id == selectedPage }) { selectedPage = book.pages.first?.id }
     }
     private func addPage() {
-        remember(); let new = NotePage(paper: page.paper)
-        document.notebook.pages.insert(new, at: pageIndex+1); selectedPage = new.id
+        templateForNewPage = true; showTemplates = true
     }
     private func duplicatePage() {
         remember(); var copy = page; copy.id = UUID()
