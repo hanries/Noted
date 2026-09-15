@@ -15,7 +15,7 @@ On iPadOS 18+, Noted supplies a paper-themed launch screen. Apple's recent-file 
 ## Write and navigate
 
 - **Pen / Highlight:** capture editable strokes. Apple Pencil pressure and coalesced samples are supported on iPad.
-- **Erase:** remove whole strokes. **Move:** select and drag one stroke or text block. **Text:** tap to insert a text block; edits update the document as you type. Done closes the inspector. Text areas remain fixed at 300 × 90 page units.
+- **Erase:** remove whole strokes. **Move:** select and drag one stroke or text block. **Text:** tap blank paper to type in place with an automatically focused cursor, or tap existing text to edit that same block. Edits update the document as you type. Done ends editing; empty new drafts leave no saved block. Text and Move accept finger input even when Pencil-only writing is enabled. Text areas remain fixed at 300 × 90 page units.
 - **Two fingers on iPad:** drag to pan and pinch to zoom, without choosing a navigation tool. Pencil touches are excluded from navigation recognizers. If a finger drawing gesture becomes a two-finger navigation gesture, the unfinished edit is cancelled; navigation itself never enters undo history. Navigation waits while a Pencil stroke is active.
 - **Hand:** beside the pen tools, enables one-finger page dragging on iPad or mouse dragging on Mac. Selecting a writing tool exits Hand mode.
 - **Mac trackpad:** scroll to pan; pinch to zoom. Mouse-wheel scrolling also pans.
@@ -27,7 +27,7 @@ On iPadOS 18+, Noted supplies a paper-themed launch screen. Apple's recent-file 
 
 Use the sidebar **+** to choose a previewed **Ruled**, **Grid**, or **Blank** template for a new page. Paper & input → Page templates changes the current page's paper without moving or flattening its contents. Page duplication, reordering, and deletion remain in the notebook menu.
 
-**Keep a blank page ready** is enabled by default and can be disabled in Paper & input or the template chooser. When a completed edit adds content to the last page, Noted appends one empty page with the same paper. It keeps you on your current page. Further edits to that page do not create additional empty pages. Undo restores both the edit and its automatic page creation together. This is a paged editor, not an infinitely scrolling canvas; choose the next page in the sidebar when ready.
+**Add pages as you scroll** is enabled by default and can be disabled in Paper & input or the template chooser. Pages form a vertical stack. Scroll through existing pages; deliberately scrolling beyond the final page adds another empty page with the same paper, including when the last page is blank. Writing or typing does not create pages. A small overscroll threshold prevents tiny edge movements from immediately creating pages. Scroll upward to return to earlier pages, or choose a page in the sidebar. Zooming alone never adds pages. Page creation can be undone separately from edits. Only visible pages are rendered, although very large notebooks still require performance testing.
 
 ## Saving, handoff, and recovery
 
@@ -50,11 +50,13 @@ Decoding rejects unsupported versions, empty notebooks, duplicate page/object ID
 
 ## Validation
 
-Run `./test-model.sh`. All **23 checks** passed after the September 14 changes: encoding/decoding, selection geometry, movement, malformed files, anchored zoom, pan bounds, coordinate/pressure mapping, zoom limits, and automatic-page creation/inheritance/round-trip behavior. Both **Noted Mac** and **Noted iPad** simulator builds passed with signing disabled.
+Run `./test-model.sh`. All **34 checks** passed after the September 14–15 scrolling/text changes: encoding/decoding, selection geometry, movement, malformed files, anchored zoom, pan bounds, coordinate/pressure mapping, zoom limits, and scroll-created page inheritance/round-trip behavior, page-gap hit testing, later-page zoom anchors, and editing existing text without duplicate or placeholder blocks. Both **Noted Mac** and **Noted iPad** simulator builds passed with signing disabled.
 
 Earlier simulator UI testing on iPad Pro 11-inch (M5), iPadOS 26.4 verified creation, Pencil-only rejection of simulated non-Pencil input, drawing with that setting disabled, moving a stroke, text persistence across tool/page switches, adding a page, erasing and Undo, zoom buttons, and close/reopen. The saved JSON independently confirmed the expected content. That testing predates the new native navigation surface and launch UI.
 
-**September 14 visual checks remain pending:** computer control found the Mac locked. The new home screens, gesture recognizers, and template picker have compiled but have not been visually or interactively verified. Model tests do not substitute for native touch or Pencil tests.
+**September 14–15 follow-up:** Mac UI testing verified the notebook home, a new grid notebook, scrolling to create page 2, drawing on page 2 without adding pages, and Undo removing that stroke. In-place typing was checked on the page: reopening and editing existing text kept one block, dismissing an empty draft saved no placeholder, and saved text survived reopening. Deleting active text dismissed its editor; Undo restored the text. The saved JSON independently confirmed two grid pages and the expected text.
+
+The updated iPad build installed and displayed its launch screen, but New notebook did not open a document during the latest attempt. The simulator also showed delayed Home/App Library responses and incomplete system icons, even after a restart; whether notebook creation is affected by the simulator or an app issue has not been established. Current iPad inline typing, scroll-created pages, and native navigation remain unverified. Model tests do not substitute for native touch or Pencil tests.
 
 ### Next device checks
 
@@ -62,10 +64,10 @@ Earlier simulator UI testing on iPad Pro 11-inch (M5), iPadOS 26.4 verified crea
 2. Turn off Pencil-only, begin a finger stroke, then put down a second finger and navigate. The unfinished mark should disappear and no stray ink/text or extra page should be saved. Lift both fingers before writing again.
 3. Select Hand and drag with one finger. Verify Mac mouse dragging, trackpad scroll, and pinch. Resize/rotate and check page bounds and drawing coordinates.
 4. Double-tap a supported Pencil to erase, then double-tap back. Check the system Off setting and physical pressure/palm rejection.
-5. Write on the last page and verify exactly one same-template spare page. Undo/Redo the edit, save/reopen, and test with automatic pages disabled.
+5. Scroll past the last page and verify a same-template page appears. Draw and type without adding pages; scroll back up. Undo/Redo page creation, save/reopen, and test with automatic pages disabled. Tap text to type in place and edit it again without creating another block.
 6. Test Mac home New/Open/Recent, iPad launch, all three paper previews, and template changes preserving content.
 7. Externally replace an open test notebook, verify history reset and exported recovery copies, then test offline iCloud conflicts without risking valuable notes.
 
 ## Future work
 
-Multi-stroke lasso, more page templates, continuous multi-page scrolling, PDF import/export, handwriting recognition, images, audio, conflict-resolution UX, production-scale rendering optimization, custom app icon, and an open-source license decision. No Stylus Labs code was copied.
+Multi-stroke lasso, more page templates, PDF import/export, handwriting recognition, images, audio, conflict-resolution UX, production-scale rendering optimization, custom app icon, and an open-source license decision. No Stylus Labs code was copied.

@@ -37,7 +37,7 @@ struct InkStroke: Codable, Identifiable, Equatable {
 
 struct TextCard: Codable, Identifiable, Equatable {
     var id = UUID()
-    var text = "New text"
+    var text = ""
     var x: Double = 90
     var y: Double = 90
 }
@@ -86,6 +86,7 @@ enum NotebookError: Error { case invalidFormat }
 struct NotebookViewport: Equatable {
     var zoom: Double = 1
     var offset: CGSize = .zero
+    var pageCount = 1
 
     func scale(in size: CGSize) -> Double {
         max(0.1, min((size.width - 44) / 768, (size.height - 44) / 1024)) * zoom
@@ -99,31 +100,68 @@ struct NotebookViewport: Equatable {
         let o = origin(in: size), s = scale(in: size)
         return InkPoint(x: (point.x - o.x) / s, y: (point.y - o.y) / s, pressure: point.pressure)
     }
-    mutating func pan(_ delta: CGSize, in size: CGSize) {
-        offset.width += delta.width; offset.height += delta.height; clamp(in: size)
+    func pageStride(in size: CGSize) -> Double { 1024 * scale(in: size) + 24 }
+    func pageOrigin(at index: Int, in size: CGSize) -> CGPoint {
+        let first = origin(in: size)
+        return CGPoint(x: first.x, y: first.y + Double(index) * pageStride(in: size))
+    }
+    func pageIndex(at point: InkPoint, in size: CGSize) -> Int? {
+        let first = origin(in: size), s = scale(in: size)
+        let index = Int(floor((point.y - first.y) / pageStride(in: size)))
+        guard (0..<pageCount).contains(index) else { return nil }
+        let y = point.y - pageOrigin(at: index, in: size).y
+        guard (0...(768 * s)).contains(point.x - first.x), (0...(1024 * s)).contains(y) else { return nil }
+        return index
+    }
+    func pagePoint(_ point: InkPoint, at index: Int, in size: CGSize) -> InkPoint {
+        let o = pageOrigin(at: index, in: size), s = scale(in: size)
+        return InkPoint(x: (point.x - o.x) / s, y: (point.y - o.y) / s, pressure: point.pressure)
+    }
+    mutating func showPage(_ index: Int, in size: CGSize) {
+        offset.height = -Double(index) * pageStride(in: size); clamp(in: size)
+    }
+    // Returns downward movement beyond the final page. Only a pan can request a new page.
+    @discardableResult
+    mutating func pan(_ delta: CGSize, in size: CGSize) -> Double {
+        let desiredY = offset.height + delta.height
+        offset.width += delta.width; offset.height = desiredY; clamp(in: size)
+        return max(0, offset.height - desiredY)
     }
     mutating func magnify(_ factor: Double, at anchor: CGPoint, in size: CGSize) {
         guard factor.isFinite, factor > 0 else { return }
-        let p = pagePoint(InkPoint(x: anchor.x, y: anchor.y), in: size)
+        let oldOrigin = origin(in: size)
+        let anchoredPage = max(0, min(pageCount - 1, Int(floor((anchor.y - oldOrigin.y) / pageStride(in: size)))))
+        let p = pagePoint(InkPoint(x: anchor.x, y: anchor.y), at: anchoredPage, in: size)
         zoom = min(4, max(1, zoom * factor))
         let s = scale(in: size)
         offset = CGSize(width: anchor.x - p.x * s - (size.width - 768 * s) / 2,
-                        height: anchor.y - p.y * s - (size.height - 1024 * s) / 2)
+                        height: anchor.y - p.y * s - Double(anchoredPage) * pageStride(in: size) - (size.height - 1024 * s) / 2)
         clamp(in: size)
     }
     mutating func clamp(in size: CGSize) {
         let s = scale(in: size)
         let x = max(0, (768 * s - size.width) / 2 + 22)
         let y = max(0, (1024 * s - size.height) / 2 + 22)
-        offset.width = min(x, max(-x, offset.width)); offset.height = min(y, max(-y, offset.height))
+        offset.width = min(x, max(-x, offset.width)); offset.height = min(y, max(-y - Double(max(0, pageCount - 1)) * pageStride(in: size), offset.height))
     }
 }
 
 extension Notebook {
     @discardableResult
-    mutating func appendContinuationPage(after pageID: UUID) -> Bool {
-        guard let last = pages.last, last.id == pageID,
-              !last.strokes.isEmpty || last.texts.contains(where: { !$0.text.isEmpty }) else { return false }
+    mutating func appendPageAfterScroll(after pageID: UUID) -> Bool {
+        guard let last = pages.last, last.id == pageID else { return false }
         pages.append(NotePage(paper: last.paper)); return true
+    }
+}
+
+
+extension NotePage {
+    func text(at point: InkPoint) -> TextCard? {
+        texts.last { ( $0.x...($0.x + 300) ).contains(point.x) && ( $0.y...($0.y + 90) ).contains(point.y) }
+    }
+    // New blank drafts do not create objects in the saved notebook.
+    mutating func updateText(id: UUID, text: String, x: Double, y: Double) {
+        if let index = texts.firstIndex(where: { $0.id == id }) { texts[index].text = text }
+        else if !text.isEmpty { texts.append(TextCard(id: id, text: text, x: x, y: y)) }
     }
 }
