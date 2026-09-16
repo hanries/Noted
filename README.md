@@ -56,7 +56,9 @@ Earlier simulator UI testing on iPad Pro 11-inch (M5), iPadOS 26.4 verified crea
 
 **September 14–15 follow-up:** Mac UI testing verified the notebook home, a new grid notebook, scrolling to create page 2, drawing on page 2 without adding pages, and Undo removing that stroke. In-place typing was checked on the page: reopening and editing existing text kept one block, dismissing an empty draft saved no placeholder, and saved text survived reopening. Deleting active text dismissed its editor; Undo restored the text. The saved JSON independently confirmed two grid pages and the expected text.
 
-The updated iPad build installed and displayed its launch screen, but New notebook did not open a document during the latest attempt. The simulator also showed delayed Home/App Library responses and incomplete system icons, even after a restart; whether notebook creation is affected by the simulator or an app issue has not been established. Current iPad inline typing, scroll-created pages, and native navigation remain unverified. Model tests do not substitute for native touch or Pencil tests.
+**September 16 creation fix:** the iPad launch button now uses the standard `NewDocumentButton` initializer, which delegates blank-notebook creation to the existing `DocumentGroup` factory. It no longer selects the custom document-preparation overload. This addresses the reported serialization failure and cancelled creation; a [similar initializer failure is reported on Apple’s developer forum](https://developer.apple.com/forums/thread/807014). The `.noted` format and existing files are unchanged.
+
+On the iPad Pro 11-inch (M5), iPadOS 26.4 simulator, New notebook opened a blank ruled page, in-place typing saved text, and closing/reopening the resulting `Untitled 2.noted` restored that text. Both platform builds and all 34 model checks passed again. The fix still needs confirmation on the physical iPad that reported the error. Current iPad scroll-created pages, native multitouch navigation, and physical Pencil behavior remain unverified. Model tests do not substitute for native touch or Pencil tests.
 
 ### Next device checks
 

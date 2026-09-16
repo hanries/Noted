@@ -37,7 +37,10 @@ struct NotedApp: App {
         #else
         if #available(iOS 18.0, *) {
             DocumentGroupLaunchScene(Text("Noted").font(.system(size: 64, weight: .medium, design: .serif)).foregroundStyle(Color(red: 0.16, green: 0.36, blue: 0.29))) {
-                NewDocumentButton("New notebook", for: NotebookDocument.self)
+                // Use DocumentGroup's factory for an ordinary blank notebook.
+                // The typed overload opts into custom document preparation and
+                // can fail serialization before the editor opens on iPadOS.
+                NewDocumentButton("New notebook")
                     .tint(Color(red: 0.16, green: 0.36, blue: 0.29))
             } background: {
                 NotebookWelcomeBackground()
