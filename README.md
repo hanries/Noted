@@ -15,7 +15,7 @@ On iPadOS 18+, Noted supplies a paper-themed launch screen. Apple's recent-file 
 ## Write and navigate
 
 - **Pen / Highlight:** capture editable strokes. Apple Pencil pressure and coalesced samples are supported on iPad.
-- **Erase:** remove whole strokes. **Move:** select and drag one stroke or text block. **Text:** tap blank paper to type in place with an automatically focused cursor, or tap existing text to edit that same block. Edits update the document as you type. Done ends editing; empty new drafts leave no saved block. Text and Move accept finger input even when Pencil-only writing is enabled. Text areas remain fixed at 300 × 90 page units.
+- **Erase:** remove whole strokes. **Lasso** (dashed box icon): circle strokes and text on a page, lift to select, then drag inside the dashed selection box to move the group. Items enclosed by or crossing the loop are selected. Start a new loop outside the box to replace the selection; tap blank paper or choose another tool to clear it. Movement stays on the same page and preserves spacing, stroke pressure, and object identities. Each completed move is one Undo step; cancelled movement restores the original contents. **Text:** tap blank paper to type in place with an automatically focused cursor, or tap existing text to edit that same block. Edits update the document as you type. Done ends editing; empty new drafts leave no saved block. Text and Lasso accept finger input even when Pencil-only writing is enabled. Text areas remain fixed at 300 × 90 page units.
 - **Two fingers on iPad:** drag to pan and pinch to zoom, without choosing a navigation tool. Pencil touches are excluded from navigation recognizers. If a finger drawing gesture becomes a two-finger navigation gesture, the unfinished edit is cancelled; navigation itself never enters undo history. Navigation waits while a Pencil stroke is active.
 - **Hand:** beside the pen tools, enables one-finger page dragging on iPad or mouse dragging on Mac. Selecting a writing tool exits Hand mode.
 - **Mac trackpad:** scroll to pan; pinch to zoom. Mouse-wheel scrolling also pans.
@@ -50,7 +50,7 @@ Decoding rejects unsupported versions, empty notebooks, duplicate page/object ID
 
 ## Validation
 
-Run `./test-model.sh`. All **34 checks** passed after the September 14–15 scrolling/text changes: encoding/decoding, selection geometry, movement, malformed files, anchored zoom, pan bounds, coordinate/pressure mapping, zoom limits, and scroll-created page inheritance/round-trip behavior, page-gap hit testing, later-page zoom anchors, and editing existing text without duplicate or placeholder blocks. Both **Noted Mac** and **Noted iPad** simulator builds passed with signing disabled.
+Run `./test-model.sh`. All **45 checks** passed after the September 16 lasso changes: encoding/decoding, selection geometry, movement, malformed files, anchored zoom, pan bounds, coordinate/pressure mapping, zoom limits, and scroll-created page inheritance/round-trip behavior, page-gap hit testing, later-page zoom anchors, and editing existing text without duplicate or placeholder blocks, lasso geometry and boundary crossings, mixed ink/text selection, and group movement/clamping/persistence. Both **Noted Mac** and **Noted iPad** simulator builds passed with signing disabled.
 
 Earlier simulator UI testing on iPad Pro 11-inch (M5), iPadOS 26.4 verified creation, Pencil-only rejection of simulated non-Pencil input, drawing with that setting disabled, moving a stroke, text persistence across tool/page switches, adding a page, erasing and Undo, zoom buttons, and close/reopen. The saved JSON independently confirmed the expected content. That testing predates the new native navigation surface and launch UI.
 
@@ -60,9 +60,11 @@ Earlier simulator UI testing on iPad Pro 11-inch (M5), iPadOS 26.4 verified crea
 
 On the iPad Pro 11-inch (M5), iPadOS 26.4 simulator, New notebook opened a blank ruled page, in-place typing saved text, and closing/reopening the resulting `Untitled 2.noted` restored that text. Both platform builds and all 34 model checks passed again. The fix still needs confirmation on the physical iPad that reported the error. Current iPad scroll-created pages, native multitouch navigation, and physical Pencil behavior remain unverified. Model tests do not substitute for native touch or Pencil tests.
 
+**September 16 lasso and toolbar fix:** Move is now a freehand lasso with a dashed box icon. Zoomed pages previously expanded the native pointer surface beyond the canvas; the pointer surface now has explicit viewport dimensions, canvas hit testing is bounded, and the toolbar stays above it. The prior build reproduced an ignored Erase tap at 195% zoom in the simulator. After the fix, the same coordinate tap selected Erase at 195%; Lasso, Highlight, and Text switched correctly at 400%. The notebook still contained its original one text item and no added strokes. These are simulated touch checks, not physical Pencil verification. Lasso geometry and group movement pass model checks; an end-to-end freehand Pencil lasso still needs physical-device testing.
+
 ### Next device checks
 
-1. With Pen selected and Pencil-only enabled, use two fingers to pan at 200% and pinch around a visible stroke. Write afterward and verify the stroke appears under the Pencil tip.
+1. At 100%, 200%, and 400%, tap every tool with the Apple Pencil and confirm the selected tool changes without creating ink. Circle several strokes and a text area with Lasso, drag the group, Undo/Redo, and save/reopen. With Pen selected and Pencil-only enabled, use two fingers to pan at 200% and pinch around a visible stroke. Write afterward and verify the stroke appears under the Pencil tip.
 2. Turn off Pencil-only, begin a finger stroke, then put down a second finger and navigate. The unfinished mark should disappear and no stray ink/text or extra page should be saved. Lift both fingers before writing again.
 3. Select Hand and drag with one finger. Verify Mac mouse dragging, trackpad scroll, and pinch. Resize/rotate and check page bounds and drawing coordinates.
 4. Double-tap a supported Pencil to erase, then double-tap back. Check the system Off setting and physical pressure/palm rejection.
@@ -72,4 +74,4 @@ On the iPad Pro 11-inch (M5), iPadOS 26.4 simulator, New notebook opened a blank
 
 ## Future work
 
-Multi-stroke lasso, more page templates, PDF import/export, handwriting recognition, images, audio, conflict-resolution UX, production-scale rendering optimization, custom app icon, and an open-source license decision. No Stylus Labs code was copied.
+More page templates, PDF import/export, handwriting recognition, images, audio, conflict-resolution UX, production-scale rendering optimization, custom app icon, and an open-source license decision. No Stylus Labs code was copied.

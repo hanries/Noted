@@ -1,13 +1,13 @@
 import SwiftUI
 
 private enum EditorTool: String, CaseIterable {
-    case pen = "Pen", highlighter = "Highlight", eraser = "Erase", select = "Move", text = "Text"
+    case pen = "Pen", highlighter = "Highlight", eraser = "Erase", select = "Lasso", text = "Text"
     var symbol: String {
         switch self {
         case .pen: "pencil.tip"
         case .highlighter: "highlighter"
         case .eraser: "eraser"
-        case .select: "cursorarrow.motionlines"
+        case .select: "rectangle.dashed"
         case .text: "textformat"
         }
     }
@@ -36,11 +36,12 @@ struct NotebookEditor: View {
     @State private var width = 2.5
     @State private var pencilOnly = true
     @State private var pending: InkStroke?
-    @State private var selectedStroke: UUID?
+    @State private var selection = PageSelection()
+    @State private var selectionPage: UUID?
+    @State private var lassoPoints: [InkPoint] = []
+    @State private var movingSelection = false
     @State private var selectedText: UUID?
     @State private var startPoint: InkPoint?
-    @State private var originalStroke: InkStroke?
-    @State private var originalText: TextCard?
     @State private var gesturePage: UUID?
     @State private var gestureBefore: Notebook?
     @State private var undoStack: [Notebook] = []
@@ -100,7 +101,7 @@ struct NotebookEditor: View {
             .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 280)
         } detail: {
             VStack(spacing: 0) {
-                tools.padding(.horizontal, 18).padding(.vertical, 12)
+                tools.padding(.horizontal, 18).padding(.vertical, 12).zIndex(1)
                 Divider()
                 GeometryReader { proxy in
                     notebookCanvas(size: proxy.size)
@@ -113,7 +114,7 @@ struct NotebookEditor: View {
                 HStack {
                     Text("PAGE \(pageIndex + 1) OF \(document.notebook.pages.count)")
                     Spacer()
-                    Text(panMode ? "Drag to move the page" : tool == .select ? "Drag ink or text to move it" : tool == .text ? "Tap text to edit, or tap blank paper to type" : "\(tool.rawValue) · \(page.paper.rawValue) paper")
+                    Text(panMode ? "Drag to move the page" : tool == .select ? (selection.count > 0 ? "\(selection.count) selected · drag inside the box to move" : "Circle ink or text to select it") : tool == .text ? "Tap text to edit, or tap blank paper to type" : "\(tool.rawValue) · \(page.paper.rawValue) paper")
                     Spacer()
                     Button { showHelp = true } label: { Image(systemName: "questionmark.circle") }
                         .buttonStyle(.plain).accessibilityLabel("Notebook help")
@@ -196,8 +197,11 @@ struct NotebookEditor: View {
                 if origin.y < size.height && origin.y + 1024 * scale > 0 {
                     ZStack(alignment: .topLeading) {
                         PaperCanvas(page: item, pending: gesturePage == item.id ? pending : nil,
-                                    selection: selectedStroke, erased: gesturePage == item.id ? erasedIDs : [],
+                                    selection: nil, erased: gesturePage == item.id ? erasedIDs : [],
                                     editingText: textEdit?.pageID == item.id ? textEdit?.id : nil)
+                        if selectionPage == item.id {
+                            SelectionOverlay(page: item, selection: selection, lasso: lassoPoints, scale: scale)
+                        }
                         if let card = item.texts.first(where: { $0.id == selectedText }) {
                             RoundedRectangle(cornerRadius: 4).stroke(accent, style: StrokeStyle(lineWidth: 1, dash: [4, 3]))
                                 .frame(width: 310 * scale, height: 100 * scale)
@@ -212,7 +216,9 @@ struct NotebookEditor: View {
             PointerSurface(pencilOnly: pencilOnly && (tool == .pen || tool == .highlighter || tool == .eraser), panMode: panMode,
                 began: { point in
                     guard let index = viewport.pageIndex(at: point, in: size), document.notebook.pages.indices.contains(index) else { return }
-                    clearSelection(); selectedPage = document.notebook.pages[index].id
+                    let pageID = document.notebook.pages[index].id
+                    if tool != .select || selectionPage != pageID { clearSelection() }
+                    selectedPage = pageID
                     begin(viewport.pagePoint(point, at: index, in: size))
                 },
                 moved: {
@@ -227,6 +233,8 @@ struct NotebookEditor: View {
                     if tool == .eraser { tool = previousWritingTool }
                     else { previousWritingTool = tool; tool = .eraser }
                 })
+                // Zoom changes page geometry, never the native input view bounds.
+                .frame(width: size.width, height: size.height)
             if let target = textEdit,
                let index = document.notebook.pages.firstIndex(where: { $0.id == target.pageID }) {
                 let origin = viewport.pageOrigin(at: index, in: size)
@@ -236,7 +244,8 @@ struct NotebookEditor: View {
                     .scaleEffect(scale, anchor: .topLeading)
                     .offset(x: origin.x + target.x * scale, y: origin.y + target.y * scale)
             }
-        }.frame(width: size.width, height: size.height).clipped()
+        }.frame(width: size.width, height: size.height)
+            .contentShape(Rectangle()).clipped()
     }
     private func scrollPages(_ delta: CGSize, size: CGSize) {
         if textEdit != nil { clearSelection() }
@@ -405,7 +414,7 @@ struct NotebookEditor: View {
             Text("Make yourself a little space.").font(.system(size: 28, weight: .medium, design: .serif))
             Text("Noted · First prototype").font(.subheadline).foregroundStyle(.secondary)
             Label("Write on iPad. Keep editing on Mac.", systemImage: "pencil.and.outline")
-            Text("Pen and Highlight draw; Erase removes whole strokes. Move lets you select and drag ink or text. Tap an existing block with Text to edit it, or tap blank paper to type directly on the page. Changes save as you type. Use two fingers to pan or pinch to zoom at any time. The hand tool enables one-finger dragging. On Mac, scroll or pinch the trackpad to navigate. Double-tap a supported Apple Pencil to switch between eraser and your writing tool (unless disabled in system settings). Choose Text, then tap the paper to add a text block. On iPad, Apple Pencil is enabled by default; switch off Apple Pencil only in the paper menu to use a finger.")
+            Text("Pen and Highlight draw; Erase removes whole strokes. Lasso lets you circle ink and text, then drag the selected group inside its dashed box. Tap an existing block with Text to edit it, or tap blank paper to type directly on the page. Changes save as you type. Use two fingers to pan or pinch to zoom at any time. The hand tool enables one-finger dragging. On Mac, scroll or pinch the trackpad to navigate. Double-tap a supported Apple Pencil to switch between eraser and your writing tool (unless disabled in system settings). Choose Text, then tap the paper to add a text block. On iPad, Apple Pencil is enabled by default; switch off Apple Pencil only in the paper menu to use a finger.")
             Label("One editable .noted file", systemImage: "doc.badge.arrow.up")
             Text("Use the system document controls to save, open, or move your notebook. Save in iCloud Drive to share the same file between your iPad and Mac. Both devices need the app and the same Apple Account. Wait for iCloud to finish before switching devices; use Recover file versions to export system-reported conflicts and retained reload copies. Conflicts are left unresolved; automatic conflict merging is not implemented. A sequential handoff has been reported working; concurrent editing and recovery still need testing.")
             Text("No account with Noted, ads, subscriptions, or hosted backend. iCloud storage limits still apply. PDF import/export and handwriting recognition are not included yet.")
@@ -460,19 +469,19 @@ struct NotebookEditor: View {
 
     private func begin(_ p: InkPoint) {
         guard (0...768).contains(p.x), (0...1024).contains(p.y) else { return }
-        clearSelection(); gestureBefore = document.notebook; gesturePage = page.id; startPoint = p
+        finish(false)
+        if tool != .select { clearSelection() }
+        gestureBefore = document.notebook; gesturePage = page.id; startPoint = p
         switch tool {
         case .pen, .highlighter:
             pending = InkStroke(points: [p], color: ink, width: tool == .highlighter ? width * 7 : width, isHighlighter: tool == .highlighter)
         case .eraser: erase(p)
         case .select:
-            selectedText = page.texts.last(where: { p.x >= $0.x && p.x <= $0.x+300 && p.y >= $0.y && p.y <= $0.y+90 })?.id
-            if let selectedText, let card = page.texts.first(where: { $0.id == selectedText }) {
-                originalText = card; selectedStroke = nil
-            } else {
-                selectedStroke = page.strokes.last(where: { $0.distance(to: p) <= max(14, $0.width) })?.id
-                originalStroke = page.strokes.first { $0.id == selectedStroke }
-            }
+            textEdit = nil; selectedText = nil
+            movingSelection = selectionPage == page.id &&
+                (selection.bounds(in: page)?.insetBy(dx: -8, dy: -8).contains(CGPoint(x: p.x, y: p.y)) ?? false)
+            if !movingSelection { selection = PageSelection(); lassoPoints = [p] }
+            selectionPage = page.id
         case .text:
             let card = page.text(at: p) ?? TextCard(x: min(p.x, 448), y: min(p.y, 914))
             pendingTextEdit = TextEditTarget(pageID: page.id, card: card)
@@ -484,15 +493,11 @@ struct NotebookEditor: View {
         case .pen, .highlighter: pending?.points.append(p)
         case .eraser: erase(p)
         case .select:
-            if let originalStroke, let i = page.strokes.firstIndex(where: { $0.id == originalStroke.id }) {
-                let xs = originalStroke.points.map(\.x), ys = originalStroke.points.map(\.y)
-                let dx = max(-(xs.min() ?? 0), min(768-(xs.max() ?? 768), p.x-startPoint.x))
-                let dy = max(-(ys.min() ?? 0), min(1024-(ys.max() ?? 1024), p.y-startPoint.y))
-                document.notebook.pages[pageIndex].strokes[i] = originalStroke.translated(x: dx, y: dy)
-            }
-            if let originalText, let i = page.texts.firstIndex(where: { $0.id == originalText.id }) {
-                document.notebook.pages[pageIndex].texts[i].x = max(0, min(448, originalText.x+p.x-startPoint.x))
-                document.notebook.pages[pageIndex].texts[i].y = max(0, min(914, originalText.y+p.y-startPoint.y))
+            if movingSelection, let original = gestureBefore?.pages.first(where: { $0.id == gesturePage }),
+               let index = document.notebook.pages.firstIndex(where: { $0.id == gesturePage }) {
+                document.notebook.pages[index] = selection.moving(original, by: CGSize(width: p.x - startPoint.x, height: p.y - startPoint.y))
+            } else if let last = lassoPoints.last, hypot(p.x - last.x, p.y - last.y) >= 2 {
+                lassoPoints.append(p)
             }
         case .text: break
         }
@@ -503,9 +508,13 @@ struct NotebookEditor: View {
     private func finish(_ cancelled: Bool) {
         guard gestureBefore != nil else { return }
         if cancelled {
-            if let gestureBefore { document.notebook = gestureBefore }; selectedStroke = nil; selectedText = nil
+            if let gestureBefore { document.notebook = gestureBefore }; selection = PageSelection(); selectedText = nil
         } else {
             if let index = document.notebook.pages.firstIndex(where: { $0.id == gesturePage }) {
+                if tool == .select && !movingSelection {
+                    selection = LassoRegion(points: lassoPoints).selection(in: document.notebook.pages[index])
+                    selectionPage = gesturePage
+                }
                 if let pending { document.notebook.pages[index].strokes.append(pending) }
                 document.notebook.pages[index].strokes.removeAll { erasedIDs.contains($0.id) }
             }
@@ -515,14 +524,15 @@ struct NotebookEditor: View {
         }
         let edit = cancelled ? nil : pendingTextEdit
         pendingTextEdit = nil
-        pending = nil; startPoint = nil; originalStroke = nil; originalText = nil; gestureBefore = nil; erasedIDs = []
+        pending = nil; startPoint = nil; lassoPoints = []; movingSelection = false; gestureBefore = nil; erasedIDs = []
         if let edit { recordedTextUndo = false; selectedText = edit.id; textEdit = edit }
     }
     private func clearSelection() {
         finish(false)
         textEdit = nil
-        selectedStroke = nil; selectedText = nil; pending = nil; startPoint = nil
-        originalStroke = nil; originalText = nil; erasedIDs = []; gestureBefore = nil
+        selection = PageSelection(); selectionPage = nil; lassoPoints = []; movingSelection = false
+        selectedText = nil; pending = nil; startPoint = nil
+        erasedIDs = []; gestureBefore = nil
     }
     private func pushUndo(_ book: Notebook) {
         undoStack.append(book)
@@ -653,5 +663,32 @@ private struct InlineTextEditor: View {
         .overlay(RoundedRectangle(cornerRadius: 4).stroke(inkColor("green"), lineWidth: 1))
         .onChange(of: text) { _, value in onEdit(value) }
         .task { focused = true }
+    }
+}
+
+private struct SelectionOverlay: View {
+    let page: NotePage
+    let selection: PageSelection
+    let lasso: [InkPoint]
+    let scale: Double
+
+    var body: some View {
+        Canvas { context, _ in
+            if let bounds = selection.bounds(in: page) {
+                let rect = CGRect(x: bounds.minX * scale - 4, y: bounds.minY * scale - 4,
+                                  width: bounds.width * scale + 8, height: bounds.height * scale + 8)
+                let box = Path(roundedRect: rect, cornerRadius: 4)
+                context.fill(box, with: .color(inkColor("green").opacity(0.06)))
+                context.stroke(box, with: .color(inkColor("green")), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
+            }
+            if let first = lasso.first {
+                var path = Path()
+                path.move(to: CGPoint(x: first.x * scale, y: first.y * scale))
+                for point in lasso.dropFirst() { path.addLine(to: CGPoint(x: point.x * scale, y: point.y * scale)) }
+                path.closeSubpath()
+                context.fill(path, with: .color(inkColor("green").opacity(0.08)))
+                context.stroke(path, with: .color(inkColor("green")), style: StrokeStyle(lineWidth: 1.5, dash: [5, 3]))
+            }
+        }.allowsHitTesting(false)
     }
 }

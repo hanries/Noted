@@ -165,3 +165,93 @@ extension NotePage {
         else if !text.isEmpty { texts.append(TextCard(id: id, text: text, x: x, y: y)) }
     }
 }
+
+// Selection is transient editor state, never part of the saved file format.
+struct PageSelection: Equatable {
+    var strokes: Set<UUID> = []
+    var texts: Set<UUID> = []
+    var count: Int { strokes.count + texts.count }
+
+    func bounds(in page: NotePage) -> CGRect? {
+        var result = CGRect.null
+        for stroke in page.strokes where strokes.contains(stroke.id) {
+            for point in stroke.points {
+                result = result.union(CGRect(x: point.x - stroke.width / 2, y: point.y - stroke.width / 2,
+                                             width: stroke.width, height: stroke.width))
+            }
+        }
+        for text in page.texts where texts.contains(text.id) {
+            result = result.union(CGRect(x: text.x, y: text.y, width: 300, height: 90))
+        }
+        return result.isNull ? nil : result
+    }
+
+    func moving(_ original: NotePage, by delta: CGSize) -> NotePage {
+        guard let bounds = bounds(in: original), delta.width.isFinite, delta.height.isFinite else { return original }
+        // Clamp the whole group once so spacing stays intact, including near page edges.
+        let dx = min(max(0, 768 - bounds.maxX), max(min(0, -bounds.minX), delta.width))
+        let dy = min(max(0, 1024 - bounds.maxY), max(min(0, -bounds.minY), delta.height))
+        var moved = original
+        for i in moved.strokes.indices where strokes.contains(moved.strokes[i].id) {
+            moved.strokes[i] = original.strokes[i].translated(x: dx, y: dy)
+        }
+        for i in moved.texts.indices where texts.contains(moved.texts[i].id) {
+            moved.texts[i].x += dx; moved.texts[i].y += dy
+        }
+        return moved
+    }
+}
+
+struct LassoRegion {
+    let points: [InkPoint]
+    private let edges: [(InkPoint, InkPoint)]
+    init(points: [InkPoint]) {
+        self.points = points
+        edges = points.first.map { Array(zip(points, Array(points.dropFirst()) + [$0])) } ?? []
+    }
+    private func onSegment(_ p: InkPoint, _ a: InkPoint, _ b: InkPoint) -> Bool {
+        abs(cross(a, b, p)) < 0.000001 &&
+        p.x >= min(a.x, b.x) - 0.000001 && p.x <= max(a.x, b.x) + 0.000001 &&
+        p.y >= min(a.y, b.y) - 0.000001 && p.y <= max(a.y, b.y) + 0.000001
+    }
+    private func cross(_ a: InkPoint, _ b: InkPoint, _ c: InkPoint) -> Double {
+        (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x)
+    }
+    private func intersects(_ a: InkPoint, _ b: InkPoint, _ c: InkPoint, _ d: InkPoint) -> Bool {
+        let abC = cross(a, b, c), abD = cross(a, b, d), cdA = cross(c, d, a), cdB = cross(c, d, b)
+        if ((abC > 0 && abD < 0) || (abC < 0 && abD > 0)) &&
+           ((cdA > 0 && cdB < 0) || (cdA < 0 && cdB > 0)) { return true }
+        return onSegment(c, a, b) || onSegment(d, a, b) || onSegment(a, c, d) || onSegment(b, c, d)
+    }
+    func contains(_ p: InkPoint) -> Bool {
+        var inside = false
+        for (a, b) in edges {
+            if onSegment(p, a, b) { return true }
+            if (a.y > p.y) != (b.y > p.y), p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x { inside.toggle() }
+        }
+        return inside
+    }
+    func selection(in page: NotePage) -> PageSelection {
+        // A tap or a straight drag is not an enclosed region.
+        guard points.count >= 3,
+              points.allSatisfy({ $0.x.isFinite && $0.y.isFinite }),
+              abs(edges.reduce(0) { $0 + $1.0.x * $1.1.y - $1.1.x * $1.0.y }) > 8 else { return PageSelection() }
+        let boundary = edges
+        var result = PageSelection()
+        for stroke in page.strokes {
+            if stroke.points.contains(where: contains) || zip(stroke.points, stroke.points.dropFirst()).contains(where: { a, b in
+                boundary.contains { intersects(a, b, $0.0, $0.1) }
+            }) { result.strokes.insert(stroke.id) }
+        }
+        for text in page.texts {
+            let corners = [InkPoint(x: text.x, y: text.y), InkPoint(x: text.x + 300, y: text.y),
+                           InkPoint(x: text.x + 300, y: text.y + 90), InkPoint(x: text.x, y: text.y + 90)]
+            let rectangle = CGRect(x: text.x, y: text.y, width: 300, height: 90)
+            if corners.contains(where: contains) || points.contains(where: { rectangle.contains(CGPoint(x: $0.x, y: $0.y)) }) ||
+                zip(corners, Array(corners.dropFirst()) + [corners[0]]).contains(where: { a, b in
+                    boundary.contains { intersects(a, b, $0.0, $0.1) }
+                }) { result.texts.insert(text.id) }
+        }
+        return result
+    }
+}
