@@ -20,7 +20,7 @@ check(stroke.distance(to: InkPoint(x: 120, y: 20)) == 10, "Selection clamps to s
 let moved = stroke.translated(x: 25, y: -5)
 check(moved.points[0].x == 35 && moved.points[0].y == 15 && moved.points[0].pressure == 0.4, "Moving preserves pressure")
 check(moved.id == stroke.id && stroke.points[0].x == 10, "Moving preserves identity and original snapshot")
-var invalid = book; invalid.version = 2
+var invalid = book; invalid.version = 3
 check((try? Notebook.decode(invalid.encoded())) == nil, "Future file versions rejected without overwriting")
 invalid = book; invalid.pages = []
 check((try? Notebook.decode(invalid.encoded())) == nil, "Empty notebook rejected safely")
@@ -126,3 +126,17 @@ let edgeBounds = group.bounds(in: edgeGroup)!
 check(abs(edgeBounds.maxX - 768) < 0.0001 && abs(edgeBounds.maxY - 1024) < 0.0001 && abs((edgeGroup.texts[0].x - edgeGroup.strokes[0].points[0].x) - (insideText.x - insideStroke.points[0].x)) < 0.0001, "Page edges clamp the whole selection without distorting its layout")
 let groupBook = Notebook(pages: [movedGroup])
 check((try? Notebook.decode(groupBook.encoded())) == groupBook, "Moved groups save and reopen as editable strokes and text")
+
+let attachment = NotebookAsset(kind: .png, data: Data([1,2,3]), pageCount: 1)
+let attachedBook = Notebook(version: 2, pages: [NotePage(background: PageBackground(assetID: attachment.id))], assets: [attachment])
+check((try? Notebook.decode(attachedBook.encoded())) == attachedBook, "Embedded backgrounds survive notebook round-trip")
+check((try? Notebook.decode(Notebook().encoded()))?.version == 1, "Ink-only notebooks keep the version-1 format")
+var badAttachment = attachedBook; badAttachment.pages[0].background?.assetID = UUID()
+check((try? Notebook.decode(badAttachment.encoded())) == nil, "Missing background assets are rejected")
+badAttachment = attachedBook; badAttachment.pages[0].background?.page = 1
+check((try? Notebook.decode(badAttachment.encoded())) == nil, "Out-of-range imported page references are rejected")
+check((try? PageRange.parse("1-3, 5, 2", count: 5)) == [0,1,2,4], "Page ranges are ordered and deduplicated")
+check((try? PageRange.parse("0, 2", count: 5)) == nil && (try? PageRange.parse("3-1", count: 5)) == nil && (try? PageRange.parse("1,", count: 5)) == nil, "Invalid page ranges fail rather than exporting the wrong pages")
+var appended = Notebook(); appended.appendImported(attachedBook); appended.appendImported(attachedBook)
+check(appended.version == 2 && Set(appended.assets!.map(\.id)).count == 2 && (try? Notebook.decode(appended.encoded())) == appended, "Repeated imports remap asset IDs and preserve valid references")
+check(appended.selectingPages([0]).assets?.isEmpty == true && appended.selectingPages([1]).assets?.count == 1, "Page exports include only the backgrounds they need")

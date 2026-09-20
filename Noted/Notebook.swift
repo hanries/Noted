@@ -51,18 +51,28 @@ struct NotePage: Codable, Identifiable, Equatable {
     var paper: Paper = .ruled
     var strokes: [InkStroke] = []
     var texts: [TextCard] = []
+    var background: PageBackground? = nil
 }
 
 struct Notebook: Codable, Equatable {
     var version = 1
     var title = "Untitled notebook"
     var pages: [NotePage] = [NotePage()]
+    var assets: [NotebookAsset]? = nil
 
     static func decode(_ data: Data) throws -> Notebook {
         let book = try JSONDecoder().decode(Notebook.self, from: data)
-        guard book.version == 1, !book.pages.isEmpty,
+        guard (1...2).contains(book.version), !book.pages.isEmpty,
               Set(book.pages.map(\.id)).count == book.pages.count else { throw NotebookError.invalidFormat }
+        let assets = book.assets ?? []
+        guard Set(assets.map(\.id)).count == assets.count,
+              assets.allSatisfy({ !$0.data.isEmpty && $0.pageCount > 0 && ($0.kind == .pdf || $0.pageCount == 1) }),
+              book.version >= 2 || (assets.isEmpty && book.pages.allSatisfy { $0.background == nil }) else { throw NotebookError.invalidFormat }
         for page in book.pages {
+            if let background = page.background {
+                guard let asset = assets.first(where: { $0.id == background.assetID }),
+                      (0..<asset.pageCount).contains(background.page) else { throw NotebookError.invalidFormat }
+            }
             guard Set(page.strokes.map(\.id)).count == page.strokes.count,
                   Set(page.texts.map(\.id)).count == page.texts.count,
                   page.strokes.allSatisfy({ stroke in
@@ -76,7 +86,9 @@ struct Notebook: Codable, Equatable {
     func encoded() throws -> Data {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        return try encoder.encode(self)
+        var copy = self
+        if version == 1 && (!(assets ?? []).isEmpty || pages.contains(where: { $0.background != nil })) { copy.version = 2 }
+        return try encoder.encode(copy)
     }
 }
 
@@ -253,5 +265,57 @@ struct LassoRegion {
                 }) { result.texts.insert(text.id) }
         }
         return result
+    }
+}
+
+
+struct NotebookAsset: Codable, Identifiable, Equatable {
+    enum Kind: String, Codable { case pdf, png, jpeg }
+    var id = UUID()
+    var kind: Kind
+    var data: Data
+    var pageCount: Int
+}
+
+struct PageBackground: Codable, Equatable {
+    var assetID: UUID
+    var page: Int = 0
+}
+
+extension Notebook {
+    func selectingPages(_ indices: [Int]) -> Notebook {
+        var copy = self
+        copy.pages = indices.filter { pages.indices.contains($0) }.map { pages[$0] }
+        let used = Set(copy.pages.compactMap { $0.background?.assetID })
+        copy.assets = assets?.filter { used.contains($0.id) }
+        return copy
+    }
+    mutating func appendImported(_ imported: Notebook) {
+        var assetIDs: [UUID: UUID] = [:]
+        let copiedAssets = (imported.assets ?? []).map { original in
+            var asset = original; asset.id = UUID(); assetIDs[original.id] = asset.id; return asset
+        }
+        if !copiedAssets.isEmpty { assets = (assets ?? []) + copiedAssets; version = 2 }
+        pages += imported.pages.map { original in
+            var page = original; page.id = UUID()
+            if let id = page.background?.assetID { page.background?.assetID = assetIDs[id] ?? id }
+            return page
+        }
+    }
+}
+
+// Page numbers entered by the user are one-based; internal indices are zero-based.
+enum PageRange {
+    static func parse(_ text: String, count: Int) throws -> [Int] {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return Array(0..<count) }
+        var result = Set<Int>()
+        for part in text.split(separator: ",", omittingEmptySubsequences: false) {
+            let ends = part.split(separator: "-", omittingEmptySubsequences: false).map { $0.trimmingCharacters(in: .whitespaces) }
+            guard (1...2).contains(ends.count), let first = Int(ends[0]), first >= 1, first <= count,
+                  let last = Int(ends.last!), last >= first, last <= count else { throw NotebookError.invalidFormat }
+            result.formUnion((first...last).map { $0 - 1 })
+        }
+        guard !result.isEmpty else { throw NotebookError.invalidFormat }
+        return result.sorted()
     }
 }

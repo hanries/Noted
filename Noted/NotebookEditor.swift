@@ -16,6 +16,12 @@ private enum EditorTool: String, CaseIterable {
 struct NotebookEditor: View {
     @Binding var document: NotebookDocument
     var fileURL: URL?
+    var onClose: (() -> Void)? = nil
+    var onMove: (() -> Void)? = nil
+    var storageStatus = "Changes save through the system document interface."
+    @State private var showTransferExport = false
+    @State private var showTransferImport = false
+    @State private var showStorage = false
     @State private var viewport = NotebookViewport()
     @State private var canvasSize = CGSize(width: 768, height: 1024)
     @State private var previousWritingTool: EditorTool = .pen
@@ -82,7 +88,7 @@ struct NotebookEditor: View {
                 })) {
                     ForEach(Array(document.notebook.pages.enumerated()), id: \.element.id) { index, item in
                         HStack(spacing: 12) {
-                            PaperCanvas(page: item, pending: nil, selection: nil, erased: [])
+                            PaperCanvas(page: item, pending: nil, selection: nil, erased: [], assets: document.notebook.assets ?? [])
                                 .frame(width: 42, height: 56).clipShape(RoundedRectangle(cornerRadius: 3))
                                 .overlay(RoundedRectangle(cornerRadius: 3).stroke(.gray.opacity(0.2)))
                             VStack(alignment: .leading, spacing: 4) {
@@ -123,6 +129,9 @@ struct NotebookEditor: View {
             }
             .navigationTitle(document.notebook.title)
             .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    if let onClose { Button("Notebooks") { clearSelection(); onClose() } }
+                }
                 ToolbarItem(placement: .primaryAction) {
                     Menu {
                         Button("Rename notebook") { titleDraft = document.notebook.title; showTitle = true }
@@ -131,7 +140,9 @@ struct NotebookEditor: View {
                         Button("Move page later") { reorder(1) }.disabled(pageIndex == document.notebook.pages.count - 1)
                         Button("Delete page", role: .destructive) { showDelete = true }.disabled(document.notebook.pages.count == 1)
                         Divider()
-                        Button("Export notebook copy") { exportCopies = [NotebookDocument(notebook: document.notebook)]; showExport = true }
+                        Button("Import pages…") { clearSelection(); showTransferImport = true }
+                        Button("Export…") { clearSelection(); showTransferExport = true }
+                        Button("Storage & other devices") { clearSelection(); showStorage = true }
                         Button("Recover file versions", action: recoverVersions)
                         Button("Saving & syncing") { showHelp = true }
                     } label: { Image(systemName: "ellipsis.circle") }
@@ -186,6 +197,42 @@ struct NotebookEditor: View {
         } message: { Text("This changes the title inside the notebook. Rename its file separately in Files or Finder.") }
         .sheet(isPresented: $showHelp) { helpView }
         .sheet(isPresented: $showTemplates) { templatePicker }
+        .sheet(isPresented: $showTransferExport) { NotebookExportSheet(notebook: document.notebook) }
+        .sheet(isPresented: $showTransferImport) {
+            NotebookImportSheet(allowNotebooks: false) { imported in
+                try NotebookStorage.backup(document.notebook)
+                remember(); clearSelection()
+                let first = document.notebook.pages.count
+                document.notebook.appendImported(imported)
+                selectedPage = document.notebook.pages[first].id
+                viewport.pageCount = document.notebook.pages.count; viewport.showPage(first, in: canvasSize)
+            }
+        }
+        .sheet(isPresented: $showStorage) {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("Notebook storage").font(.title2)
+                Label(NotebookStorage.location(fileURL), systemImage: "folder")
+                if let fileURL { Text(fileURL.lastPathComponent).font(.caption) }
+                Text(storageStatus).foregroundStyle(.secondary)
+                Text("Keep notes on this device without an account. To use the same editable notebook elsewhere, choose a location in Files such as Google Drive or iCloud Drive. Install and sign into your chosen drive separately. Wait for its uploads before switching devices.")
+                if let onMove {
+                    Button("Move notebook…") { showStorage = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { onMove() } }.buttonStyle(.borderedProminent)
+                } else {
+                    #if os(macOS)
+                    Button("Move notebook…") {
+                        showStorage = false
+                        if let fileURL, let native = NSDocumentController.shared.document(for: fileURL) {
+                            do { try NotebookStorage.backup(document.notebook); native.move(nil) }
+                            catch { recoveryMessage = error.localizedDescription; showRecovery = true }
+                        }
+                    }.disabled(fileURL == nil)
+                    #endif
+                }
+                Button("Export a separate copy…") { showStorage = false; DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { showTransferExport = true } }
+                Text("A move changes the working file’s location. An export makes an independent copy. Cloud status and conflict behavior depend on the provider; simultaneous editing is not supported.").font(.caption).foregroundStyle(.secondary)
+                Button("Done") { showStorage = false }
+            }.padding(28).frame(idealWidth: 500)
+        }
     }
 
     private func notebookCanvas(size: CGSize) -> some View {
@@ -198,7 +245,7 @@ struct NotebookEditor: View {
                     ZStack(alignment: .topLeading) {
                         PaperCanvas(page: item, pending: gesturePage == item.id ? pending : nil,
                                     selection: nil, erased: gesturePage == item.id ? erasedIDs : [],
-                                    editingText: textEdit?.pageID == item.id ? textEdit?.id : nil)
+                                    editingText: textEdit?.pageID == item.id ? textEdit?.id : nil, assets: document.notebook.assets ?? [])
                         if selectionPage == item.id {
                             SelectionOverlay(page: item, selection: selection, lasso: lassoPoints, scale: scale)
                         }
@@ -413,11 +460,11 @@ struct NotebookEditor: View {
         VStack(alignment: .leading, spacing: 20) {
             Text("Make yourself a little space.").font(.system(size: 28, weight: .medium, design: .serif))
             Text("Noted · First prototype").font(.subheadline).foregroundStyle(.secondary)
-            Label("Write on iPad. Keep editing on Mac.", systemImage: "pencil.and.outline")
+            Label("Your notes, on your device.", systemImage: "pencil.and.outline")
             Text("Pen and Highlight draw; Erase removes whole strokes. Lasso lets you circle ink and text, then drag the selected group inside its dashed box. Tap an existing block with Text to edit it, or tap blank paper to type directly on the page. Changes save as you type. Use two fingers to pan or pinch to zoom at any time. The hand tool enables one-finger dragging. On Mac, scroll or pinch the trackpad to navigate. Double-tap a supported Apple Pencil to switch between eraser and your writing tool (unless disabled in system settings). Choose Text, then tap the paper to add a text block. On iPad, Apple Pencil is enabled by default; switch off Apple Pencil only in the paper menu to use a finger.")
             Label("One editable .noted file", systemImage: "doc.badge.arrow.up")
-            Text("Use the system document controls to save, open, or move your notebook. Save in iCloud Drive to share the same file between your iPad and Mac. Both devices need the app and the same Apple Account. Wait for iCloud to finish before switching devices; use Recover file versions to export system-reported conflicts and retained reload copies. Conflicts are left unresolved; automatic conflict merging is not implemented. A sequential handoff has been reported working; concurrent editing and recovery still need testing.")
-            Text("No account with Noted, ads, subscriptions, or hosted backend. iCloud storage limits still apply. PDF import/export and handwriting recognition are not included yet.")
+            Text("Use the system document controls to save, open, or move your notebook. Local storage needs no account. Optionally move the notebook to a Files location such as Google Drive or iCloud Drive. Wait for your provider to upload changes before switching devices; use Recover file versions to export system-reported conflicts and retained reload copies. Conflicts are left unresolved; automatic conflict merging is not implemented. A sequential handoff has been reported working; concurrent editing and recovery still need testing.")
+            Text("No account with Noted, ads, subscriptions, or hosted backend. Your chosen drive’s storage limits still apply. PDF and image imports become backgrounds; handwriting recognition is not included.")
                 .font(.callout).foregroundStyle(.secondary)
             Button("Back to my notebook") { showHelp = false }.buttonStyle(.borderedProminent)
         }.padding(32).frame(idealWidth: 510)
@@ -584,10 +631,14 @@ struct PaperCanvas: View {
     var selection: UUID?
     var erased: Set<UUID>
     var editingText: UUID? = nil
+    var assets: [NotebookAsset] = []
     var body: some View {
         Canvas { context, size in
             context.scaleBy(x: size.width/768, y: size.height/1024)
             context.fill(Path(CGRect(x: 0, y: 0, width: 768, height: 1024)), with: .color(Color(red: 1, green: 0.995, blue: 0.98)))
+            if let image = NotebookRenderer.background(page.background, assets: assets) {
+                context.draw(Image(decorative: image, scale: 1), in: CGRect(x: 0, y: 0, width: 768, height: 1024))
+            }
             if page.paper != .blank {
                 var lines = Path()
                 let step = page.paper == .grid ? 24 : 32
