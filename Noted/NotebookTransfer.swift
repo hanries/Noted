@@ -111,7 +111,7 @@ enum NotebookRenderer {
         context.closePDF(); return data as Data
     }
     private static func color(_ name: String) -> CGColor {
-        let colors: [String: [CGFloat]] = ["ink": [0.18, 0.22, 0.23], "green": [0.16, 0.40, 0.31], "blue": [0.22, 0.38, 0.65], "red": [0.72, 0.29, 0.25], "gold": [0.88, 0.68, 0.20]]
+        let colors: [String: [CGFloat]] = ["ink": [0.18, 0.22, 0.23], "green": [0.16, 0.40, 0.31], "blue": [0.22, 0.38, 0.65], "red": [0.72, 0.29, 0.25], "gold": [0.88, 0.68, 0.20], "purple": [0.48, 0.28, 0.66]]
         let c = colors[name] ?? colors["ink"]!; return CGColor(red: c[0], green: c[1], blue: c[2], alpha: 1)
     }
     private static func drawBackground(_ asset: NotebookAsset, page: Int, in context: CGContext) {
@@ -128,9 +128,14 @@ enum NotebookRenderer {
             context.draw(image, in: CGRect(x: (768-size.width)/2, y: (1024-size.height)/2, width: size.width, height: size.height))
         }
     }
-    static func draw(page: NotePage, assets: [NotebookAsset], paper: Bool, in context: CGContext) {
+    static func draw(page: NotePage, assets: [NotebookAsset], paper: Bool, in context: CGContext, preview: Bool = false) {
         context.setFillColor(CGColor(gray: 1, alpha: 1)); context.fill(CGRect(x: 0, y: 0, width: 768, height: 1024))
-        if let background = page.background, let asset = assets.first(where: { $0.id == background.assetID }) { drawBackground(asset, page: background.page, in: context) }
+        if let reference = page.background {
+            if preview, let image = background(reference, assets: assets) {
+                context.saveGState(); context.translateBy(x: 0, y: 1024); context.scaleBy(x: 1, y: -1)
+                context.draw(image, in: CGRect(x: 0, y: 0, width: 768, height: 1024)); context.restoreGState()
+            } else if let asset = assets.first(where: { $0.id == reference.assetID }) { drawBackground(asset, page: reference.page, in: context) }
+        }
         if paper && page.paper != .blank {
             context.setStrokeColor(CGColor(gray: 0.5, alpha: 0.17)); context.setLineWidth(0.6)
             let step = page.paper == .grid ? 24 : 32
@@ -138,23 +143,70 @@ enum NotebookRenderer {
             if page.paper == .grid { for x in stride(from: 40, through: 728, by: 24) { context.move(to: CGPoint(x: x, y: 64)); context.addLine(to: CGPoint(x: x, y: 992)) } }
             context.strokePath()
         }
-        for stroke in page.strokes {
-            context.saveGState(); context.setAlpha(stroke.isHighlighter ? 0.28 : 1); context.beginTransparencyLayer(auxiliaryInfo: nil)
-            context.setStrokeColor(color(stroke.color)); context.setFillColor(color(stroke.color)); context.setLineCap(.round)
-            if stroke.points.count == 1, let p = stroke.points.first { context.fillEllipse(in: CGRect(x: p.x-stroke.width/2, y: p.y-stroke.width/2, width: stroke.width, height: stroke.width)) }
-            for (a,b) in zip(stroke.points, stroke.points.dropFirst()) {
-                context.setLineWidth(stroke.width * (stroke.isHighlighter ? 1 : 0.45 + 0.55 * (a.pressure+b.pressure)/2))
-                context.move(to: CGPoint(x: a.x, y: a.y)); context.addLine(to: CGPoint(x: b.x, y: b.y)); context.strokePath()
+        for item in page.images ?? [] {
+            if let asset = assets.first(where: { $0.id == item.assetID }), let image = objectImage(asset) {
+                context.saveGState(); context.translateBy(x: item.x, y: item.y + item.height); context.scaleBy(x: 1, y: -1)
+                context.draw(image, in: CGRect(x: 0, y: 0, width: item.width, height: item.height)); context.restoreGState()
             }
-            context.endTransparencyLayer(); context.restoreGState()
         }
+        for stroke in page.strokes { drawStroke(stroke, in: context) }
         for text in page.texts {
-            context.saveGState(); context.translateBy(x: text.x, y: text.y + 90); context.scaleBy(x: 1, y: -1); context.textMatrix = .identity
-            let font = CTFontCreateUIFontForLanguage(.system, 20, nil) ?? CTFontCreateWithName("Helvetica" as CFString, 20, nil)
+            context.saveGState(); context.translateBy(x: text.x, y: text.y + text.height); context.scaleBy(x: 1, y: -1); context.textMatrix = .identity
+            let font = CTFontCreateUIFontForLanguage(.system, text.size, nil) ?? CTFontCreateWithName("Helvetica" as CFString, text.size, nil)
             let string = NSAttributedString(string: text.text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font, NSAttributedString.Key(kCTForegroundColorAttributeName as String): color("ink")])
             let setter = CTFramesetterCreateWithAttributedString(string)
-            let frame = CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0), CGPath(rect: CGRect(x: 0,y: 0,width: 300,height: 90), transform: nil), nil)
+            let frame = CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0), CGPath(rect: CGRect(x: 0,y: 0,width: text.width,height: text.height), transform: nil), nil)
             CTFrameDraw(frame, context); context.restoreGState()
         }
+    }
+}
+
+
+extension NotebookRenderer {
+    static func objectImage(_ asset: NotebookAsset) -> CGImage? {
+        let key = "object-\(asset.id)" as NSString
+        if let image = backgroundCache.object(forKey: key) { return image }
+        guard let source = CGImageSourceCreateWithData(asset.data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 4096] as CFDictionary) else { return nil }
+        backgroundCache.setObject(image, forKey: key, cost: image.bytesPerRow * image.height)
+        return image
+    }
+    static func textHeight(_ text: String, width: Double, fontSize: Double) -> Double {
+        let font = CTFontCreateUIFontForLanguage(.system, fontSize, nil)!
+        let string = NSAttributedString(string: text.isEmpty ? " " : text, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font])
+        let size = CTFramesetterSuggestFrameSizeWithConstraints(CTFramesetterCreateWithAttributedString(string), CFRange(), nil, CGSize(width: width, height: 100000), nil)
+        return ceil(size.height) + 12
+    }
+    static func drawStroke(_ stroke: InkStroke, in context: CGContext) {
+        context.saveGState(); defer { context.restoreGState() }
+        let pencil = stroke.pencil == true
+        context.setAlpha(stroke.isHighlighter ? 0.28 : 1)
+        context.beginTransparencyLayer(auxiliaryInfo: nil)
+        context.setStrokeColor(color(stroke.color)); context.setFillColor(color(stroke.color)); context.setLineCap(.round)
+        if stroke.points.count == 1, let p = stroke.points.first {
+            context.setAlpha(pencil ? 0.3 + p.pressure*0.5 : 1)
+            context.fillEllipse(in: CGRect(x: p.x-stroke.width/2, y: p.y-stroke.width/2, width: stroke.width, height: stroke.width))
+        }
+        for (a,b) in zip(stroke.points, stroke.points.dropFirst()) {
+            let pressure = (a.pressure+b.pressure)/2
+            context.setAlpha(pencil ? 0.25 + pressure*0.55 : 1)
+            context.setLineWidth(stroke.width * (stroke.isHighlighter ? 1 : 0.45 + 0.55 * pressure))
+            context.move(to: CGPoint(x: a.x, y: a.y)); context.addLine(to: CGPoint(x: b.x, y: b.y)); context.strokePath()
+            // Stable, fine grain gives Pencil a softer edge without changing its editable samples.
+            if pencil {
+                context.setAlpha(0.16); context.setLineWidth(max(0.3, stroke.width*0.12))
+                let offset = stroke.width * 0.35
+                context.move(to: CGPoint(x: a.x-offset, y: a.y)); context.addLine(to: CGPoint(x: b.x-offset, y: b.y)); context.strokePath()
+            }
+        }
+        context.endTransparencyLayer()
+    }
+}
+
+extension NotebookTransfer {
+    static func photo(_ data: Data) throws -> NotebookAsset {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: 4096] as CFDictionary) else { throw TransferError(message: "This image couldn’t be opened.") }
+        return NotebookAsset(kind: .png, data: try NotebookRenderer.imageData(image, type: .png), pageCount: 1)
     }
 }

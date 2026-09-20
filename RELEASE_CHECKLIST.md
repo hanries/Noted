@@ -15,7 +15,7 @@ Noted is still a prototype. Complete the safety and device checks before a publi
 
 ## Useful near-term improvements
 
-- Resize text areas; reliable copy/paste, selection, and hardware-keyboard editing.
+- Validate the new text resizing, editable copy/paste and selection on devices; refine hardware-keyboard editing.
 - Page overview, page titles/bookmarks, and faster navigation in long notebooks.
 - Simple folders/tags and a recent external-notebook list with reconnect handling.
 - Restore-from-backup preview and user-controlled backup retention.

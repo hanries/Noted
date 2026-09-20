@@ -15,6 +15,7 @@ struct InkStroke: Codable, Identifiable, Equatable {
     var color: String = "ink"
     var width: Double = 2.5
     var isHighlighter = false
+    var pencil: Bool? = nil
 
     func distance(to point: InkPoint) -> Double {
         guard let first = points.first else { return .infinity }
@@ -40,6 +41,23 @@ struct TextCard: Codable, Identifiable, Equatable {
     var text = ""
     var x: Double = 90
     var y: Double = 90
+    var boxWidth: Double? = nil
+    var boxHeight: Double? = nil
+    var fontSize: Double? = nil
+    var width: Double { boxWidth ?? 300 }
+    var height: Double { boxHeight ?? 90 }
+    var size: Double { fontSize ?? 20 }
+    var bounds: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+}
+
+struct PlacedImage: Codable, Identifiable, Equatable {
+    var id = UUID()
+    var assetID: UUID
+    var x: Double
+    var y: Double
+    var width: Double
+    var height: Double
+    var bounds: CGRect { CGRect(x: x, y: y, width: width, height: height) }
 }
 
 enum Paper: String, Codable, CaseIterable {
@@ -52,6 +70,7 @@ struct NotePage: Codable, Identifiable, Equatable {
     var strokes: [InkStroke] = []
     var texts: [TextCard] = []
     var background: PageBackground? = nil
+    var images: [PlacedImage]? = nil
 }
 
 struct Notebook: Codable, Equatable {
@@ -62,13 +81,21 @@ struct Notebook: Codable, Equatable {
 
     static func decode(_ data: Data) throws -> Notebook {
         let book = try JSONDecoder().decode(Notebook.self, from: data)
-        guard (1...2).contains(book.version), !book.pages.isEmpty,
+        guard (1...3).contains(book.version), !book.pages.isEmpty,
               Set(book.pages.map(\.id)).count == book.pages.count else { throw NotebookError.invalidFormat }
         let assets = book.assets ?? []
         guard Set(assets.map(\.id)).count == assets.count,
               assets.allSatisfy({ !$0.data.isEmpty && $0.pageCount > 0 && ($0.kind == .pdf || $0.pageCount == 1) }),
               book.version >= 2 || (assets.isEmpty && book.pages.allSatisfy { $0.background == nil }) else { throw NotebookError.invalidFormat }
         for page in book.pages {
+            guard book.version >= 3 || (!page.usesModernObjects) else { throw NotebookError.invalidFormat }
+            let images = page.images ?? []
+            guard Set(images.map(\.id)).count == images.count,
+                  images.allSatisfy({ item in
+                      item.x.isFinite && item.y.isFinite && item.width.isFinite && item.height.isFinite &&
+                      item.width > 0 && item.width <= 768 && item.height > 0 && item.height <= 1024 &&
+                      assets.contains { $0.id == item.assetID && $0.kind != .pdf }
+                  }) else { throw NotebookError.invalidFormat }
             if let background = page.background {
                 guard let asset = assets.first(where: { $0.id == background.assetID }),
                       (0..<asset.pageCount).contains(background.page) else { throw NotebookError.invalidFormat }
@@ -78,7 +105,7 @@ struct Notebook: Codable, Equatable {
                   page.strokes.allSatisfy({ stroke in
                       stroke.width.isFinite && stroke.width > 0 && stroke.width <= 100 &&
                       stroke.points.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.pressure.isFinite && $0.pressure >= 0 && $0.pressure <= 1 }
-                  }), page.texts.allSatisfy({ $0.x.isFinite && $0.y.isFinite }) else { throw NotebookError.invalidFormat }
+                  }), page.texts.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.width.isFinite && $0.width > 0 && $0.width <= 768 && $0.height.isFinite && $0.height > 0 && $0.height <= 1024 && $0.size.isFinite && (1...200).contains($0.size) }) else { throw NotebookError.invalidFormat }
         }
         return book
     }
@@ -88,6 +115,7 @@ struct Notebook: Codable, Equatable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         var copy = self
         if version == 1 && (!(assets ?? []).isEmpty || pages.contains(where: { $0.background != nil })) { copy.version = 2 }
+        if (1...2).contains(version) && pages.contains(where: \.usesModernObjects) { copy.version = 3 }
         return try encoder.encode(copy)
     }
 }
@@ -169,7 +197,7 @@ extension Notebook {
 
 extension NotePage {
     func text(at point: InkPoint) -> TextCard? {
-        texts.last { ( $0.x...($0.x + 300) ).contains(point.x) && ( $0.y...($0.y + 90) ).contains(point.y) }
+        texts.last { $0.bounds.contains(CGPoint(x: point.x, y: point.y)) }
     }
     // New blank drafts do not create objects in the saved notebook.
     mutating func updateText(id: UUID, text: String, x: Double, y: Double) {
@@ -182,7 +210,8 @@ extension NotePage {
 struct PageSelection: Equatable {
     var strokes: Set<UUID> = []
     var texts: Set<UUID> = []
-    var count: Int { strokes.count + texts.count }
+    var images: Set<UUID> = []
+    var count: Int { strokes.count + texts.count + images.count }
 
     func bounds(in page: NotePage) -> CGRect? {
         var result = CGRect.null
@@ -193,8 +222,9 @@ struct PageSelection: Equatable {
             }
         }
         for text in page.texts where texts.contains(text.id) {
-            result = result.union(CGRect(x: text.x, y: text.y, width: 300, height: 90))
+            result = result.union(text.bounds)
         }
+        for image in page.images ?? [] where images.contains(image.id) { result = result.union(image.bounds) }
         return result.isNull ? nil : result
     }
 
@@ -209,6 +239,10 @@ struct PageSelection: Equatable {
         }
         for i in moved.texts.indices where texts.contains(moved.texts[i].id) {
             moved.texts[i].x += dx; moved.texts[i].y += dy
+        }
+        if var items = moved.images {
+            for i in items.indices where images.contains(items[i].id) { items[i].x += dx; items[i].y += dy }
+            moved.images = items
         }
         return moved
     }
@@ -256,13 +290,19 @@ struct LassoRegion {
             }) { result.strokes.insert(stroke.id) }
         }
         for text in page.texts {
-            let corners = [InkPoint(x: text.x, y: text.y), InkPoint(x: text.x + 300, y: text.y),
-                           InkPoint(x: text.x + 300, y: text.y + 90), InkPoint(x: text.x, y: text.y + 90)]
-            let rectangle = CGRect(x: text.x, y: text.y, width: 300, height: 90)
+            let corners = [InkPoint(x: text.x, y: text.y), InkPoint(x: text.x + text.width, y: text.y),
+                           InkPoint(x: text.x + text.width, y: text.y + text.height), InkPoint(x: text.x, y: text.y + text.height)]
+            let rectangle = text.bounds
             if corners.contains(where: contains) || points.contains(where: { rectangle.contains(CGPoint(x: $0.x, y: $0.y)) }) ||
                 zip(corners, Array(corners.dropFirst()) + [corners[0]]).contains(where: { a, b in
                     boundary.contains { intersects(a, b, $0.0, $0.1) }
                 }) { result.texts.insert(text.id) }
+        }
+        for image in page.images ?? [] {
+            let r = image.bounds
+            let corners = [InkPoint(x: r.minX, y: r.minY), InkPoint(x: r.maxX, y: r.minY), InkPoint(x: r.maxX, y: r.maxY), InkPoint(x: r.minX, y: r.maxY)]
+            if corners.contains(where: contains) || points.contains(where: { r.contains(CGPoint(x: $0.x, y: $0.y)) }) ||
+                zip(corners, Array(corners.dropFirst()) + [corners[0]]).contains(where: { a, b in boundary.contains { intersects(a, b, $0.0, $0.1) } }) { result.images.insert(image.id) }
         }
         return result
     }
@@ -286,7 +326,7 @@ extension Notebook {
     func selectingPages(_ indices: [Int]) -> Notebook {
         var copy = self
         copy.pages = indices.filter { pages.indices.contains($0) }.map { pages[$0] }
-        let used = Set(copy.pages.compactMap { $0.background?.assetID })
+        let used = Set(copy.pages.compactMap { $0.background?.assetID } + copy.pages.flatMap { ($0.images ?? []).map(\.assetID) })
         copy.assets = assets?.filter { used.contains($0.id) }
         return copy
     }
@@ -295,10 +335,11 @@ extension Notebook {
         let copiedAssets = (imported.assets ?? []).map { original in
             var asset = original; asset.id = UUID(); assetIDs[original.id] = asset.id; return asset
         }
-        if !copiedAssets.isEmpty { assets = (assets ?? []) + copiedAssets; version = 2 }
+        if !copiedAssets.isEmpty { assets = (assets ?? []) + copiedAssets; version = max(version, imported.version, 2) }
         pages += imported.pages.map { original in
             var page = original; page.id = UUID()
             if let id = page.background?.assetID { page.background?.assetID = assetIDs[id] ?? id }
+            page.images = page.images?.map { original in var image = original; image.assetID = assetIDs[image.assetID] ?? image.assetID; return image }
             return page
         }
     }
@@ -317,5 +358,95 @@ enum PageRange {
         }
         guard !result.isEmpty else { throw NotebookError.invalidFormat }
         return result.sorted()
+    }
+}
+
+
+extension NotePage {
+    var usesModernObjects: Bool {
+        !(images ?? []).isEmpty || strokes.contains { $0.pencil != nil } || texts.contains { $0.boxWidth != nil || $0.boxHeight != nil || $0.fontSize != nil }
+    }
+}
+
+extension PageSelection {
+    static func rectangle(from a: InkPoint, to b: InkPoint, in page: NotePage) -> PageSelection {
+        LassoRegion(points: [a, InkPoint(x: b.x, y: a.y), b, InkPoint(x: a.x, y: b.y)]).selection(in: page)
+    }
+    func removing(from page: NotePage) -> NotePage {
+        var copy = page
+        copy.strokes.removeAll { strokes.contains($0.id) }
+        copy.texts.removeAll { texts.contains($0.id) }
+        copy.images?.removeAll { images.contains($0.id) }
+        return copy
+    }
+    func contents(of page: NotePage) -> NotePage {
+        NotePage(paper: .blank, strokes: page.strokes.filter { strokes.contains($0.id) }, texts: page.texts.filter { texts.contains($0.id) }, images: page.images?.filter { images.contains($0.id) })
+    }
+    func resizing(_ page: NotePage, to point: InkPoint) -> NotePage {
+        guard let r = bounds(in: page), r.width > 0, r.height > 0 else { return page }
+        var copy = page
+        if count == 1, let index = page.texts.firstIndex(where: { texts.contains($0.id) }) {
+            copy.texts[index].boxWidth = max(44, min(768 - r.minX, point.x - r.minX))
+            copy.texts[index].boxHeight = max(44, min(1024 - r.minY, point.y - r.minY))
+            return copy
+        }
+        var factor = max(0.1, min((point.x-r.minX)/r.width, (point.y-r.minY)/r.height))
+        factor = min(factor, (768-r.minX)/r.width, (1024-r.minY)/r.height)
+        for text in page.texts where texts.contains(text.id) { factor = min(factor, 200/text.size); factor = max(factor, 1/text.size) }
+        for stroke in page.strokes where strokes.contains(stroke.id) { factor = min(factor, 100/stroke.width) }
+        guard factor > 0 && factor.isFinite else { return page }
+        for i in copy.strokes.indices where strokes.contains(copy.strokes[i].id) {
+            copy.strokes[i].points = page.strokes[i].points.map { InkPoint(x: r.minX + ($0.x-r.minX)*factor, y: r.minY + ($0.y-r.minY)*factor, pressure: $0.pressure) }
+            copy.strokes[i].width *= factor
+        }
+        for i in copy.texts.indices where texts.contains(copy.texts[i].id) {
+            let t = page.texts[i]
+            copy.texts[i].x = r.minX + (t.x-r.minX)*factor; copy.texts[i].y = r.minY + (t.y-r.minY)*factor
+            copy.texts[i].boxWidth = t.width*factor; copy.texts[i].boxHeight = t.height*factor; copy.texts[i].fontSize = t.size*factor
+        }
+        if var items = copy.images {
+            for i in items.indices where images.contains(items[i].id) {
+                items[i].x = r.minX + (items[i].x-r.minX)*factor; items[i].y = r.minY + (items[i].y-r.minY)*factor
+                items[i].width *= factor; items[i].height *= factor
+            }
+            copy.images = items
+        }
+        return copy
+    }
+}
+
+extension InkStroke {
+    // Clip each segment against the eraser circle, retaining interpolated pressure.
+    func erasing(at center: InkPoint, radius: Double) -> [InkStroke] {
+        guard distance(to: center) <= radius + width/2 else { return [self] }
+        let radius = radius + width/2
+        if points.count == 1 { return [] }
+        var fragments: [[InkPoint]] = [], run: [InkPoint] = []
+        func point(_ a: InkPoint, _ b: InkPoint, _ t: Double) -> InkPoint {
+            InkPoint(x: a.x+(b.x-a.x)*t, y: a.y+(b.y-a.y)*t, pressure: a.pressure+(b.pressure-a.pressure)*t)
+        }
+        func flush() { if run.count >= 2 { fragments.append(run) }; run = [] }
+        for (a,b) in zip(points, points.dropFirst()) {
+            let dx = b.x-a.x, dy = b.y-a.y, fx = a.x-center.x, fy = a.y-center.y
+            let aa = dx*dx+dy*dy, bb = 2*(fx*dx+fy*dy), cc = fx*fx+fy*fy-radius*radius
+            var cuts = [0.0, 1.0]
+            let discriminant = bb*bb-4*aa*cc
+            if aa > 0 && discriminant > 0 {
+                for t in [(-bb-sqrt(discriminant))/(2*aa), (-bb+sqrt(discriminant))/(2*aa)] where t > 0 && t < 1 { cuts.append(t) }
+            }
+            cuts.sort()
+            for (lo,hi) in zip(cuts, cuts.dropFirst()) {
+                let mid = point(a,b,(lo+hi)/2)
+                if hypot(mid.x-center.x,mid.y-center.y) >= radius {
+                    let start = point(a,b,lo), end = point(a,b,hi)
+                    if let last = run.last, hypot(last.x-start.x,last.y-start.y) > 0.0001 { flush() }
+                    if run.isEmpty { run.append(start) }; run.append(end)
+                } else { flush() }
+            }
+        }
+        flush()
+        return fragments.enumerated().map { index, points in
+            var copy = self; copy.points = points; if index > 0 { copy.id = UUID() }; return copy
+        }
     }
 }

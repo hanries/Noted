@@ -56,7 +56,7 @@ struct NotebookImportSheet: View {
 struct NotebookExportSheet: View {
     @Environment(\.dismiss) private var dismiss
     let notebook: Notebook
-    @State private var format = "Noted"
+    @AppStorage("exportFormat") private var format = "PDF"
     @State private var range = ""
     @State private var includePaper = true
     @State private var busy = false

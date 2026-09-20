@@ -20,7 +20,7 @@ check(stroke.distance(to: InkPoint(x: 120, y: 20)) == 10, "Selection clamps to s
 let moved = stroke.translated(x: 25, y: -5)
 check(moved.points[0].x == 35 && moved.points[0].y == 15 && moved.points[0].pressure == 0.4, "Moving preserves pressure")
 check(moved.id == stroke.id && stroke.points[0].x == 10, "Moving preserves identity and original snapshot")
-var invalid = book; invalid.version = 3
+var invalid = book; invalid.version = 4
 check((try? Notebook.decode(invalid.encoded())) == nil, "Future file versions rejected without overwriting")
 invalid = book; invalid.pages = []
 check((try? Notebook.decode(invalid.encoded())) == nil, "Empty notebook rejected safely")
@@ -140,3 +140,48 @@ check((try? PageRange.parse("0, 2", count: 5)) == nil && (try? PageRange.parse("
 var appended = Notebook(); appended.appendImported(attachedBook); appended.appendImported(attachedBook)
 check(appended.version == 2 && Set(appended.assets!.map(\.id)).count == 2 && (try? Notebook.decode(appended.encoded())) == appended, "Repeated imports remap asset IDs and preserve valid references")
 check(appended.selectingPages([0]).assets?.isEmpty == true && appended.selectingPages([1]).assets?.count == 1, "Page exports include only the backgrounds they need")
+
+let cutSource = InkStroke(points: [InkPoint(x: 10, y: 100, pressure: 0.2), InkPoint(x: 210, y: 100, pressure: 1)], width: 2)
+let cut = cutSource.erasing(at: InkPoint(x: 110, y: 100), radius: 9)
+check(cut.count == 2 && abs(cut[0].points.last!.x - 100) < 0.001 && abs(cut[1].points.first!.x - 120) < 0.001, "Partial eraser clips sparse segments exactly at its boundary")
+check(cut[0].id == cutSource.id && cut[1].id != cutSource.id && cut[0].points.last!.pressure > 0.2 && cut[1].points.first!.pressure < 1, "Split strokes keep unique identities and interpolated pressure")
+check(cutSource.erasing(at: InkPoint(x: 500, y: 500), radius: 9) == [cutSource], "Eraser leaves distant strokes unchanged")
+check(cutSource.erasing(at: InkPoint(x: 110, y: 100), radius: 300).isEmpty, "Eraser can remove a fully covered stroke")
+let dot = InkStroke(points: [InkPoint(x: 40, y: 50)])
+check(dot.erasing(at: InkPoint(x: 40, y: 50), radius: 5).isEmpty, "Partial eraser removes a dot")
+let cutNotebook = Notebook(pages: [NotePage(strokes: cut)])
+check((try? Notebook.decode(cutNotebook.encoded())) == cutNotebook, "Partially erased strokes remain editable after reopening")
+
+let imageAsset = NotebookAsset(kind: .png, data: Data([1,2,3]), pageCount: 1)
+let placed = PlacedImage(assetID: imageAsset.id, x: 100, y: 200, width: 200, height: 100)
+let flexible = TextCard(text: "Resizable", x: 350, y: 300, boxWidth: 200, boxHeight: 60, fontSize: 24)
+var modernPage = NotePage(strokes: [InkStroke(points: [InkPoint(x: 60, y: 60, pressure: 0.4)], pencil: true)], texts: [flexible], images: [placed])
+var modernBook = Notebook(version: 3, pages: [modernPage], assets: [imageAsset])
+check((try? Notebook.decode(modernBook.encoded())) == modernBook, "Pencil, flexible text and image geometry survive version 3 round-trip")
+var upgrade = modernBook; upgrade.version = 1
+check((try? Notebook.decode(upgrade.encoded()).version) == 3, "Modern edits upgrade legacy notebooks on serialization")
+check((try? Notebook.decode(Notebook().encoded()).version) == 1, "Plain notebooks retain legacy version 1")
+check(PageSelection.rectangle(from: InkPoint(x: 90, y: 190), to: InkPoint(x: 320, y: 320), in: modernPage).images == [placed.id], "Rectangle selection includes placed images")
+let imageSelection = PageSelection(images: [placed.id])
+let imageMoved = imageSelection.moving(modernPage, by: CGSize(width: 1000, height: 1000))
+check(imageMoved.images![0].bounds.maxX == 768 && imageMoved.images![0].bounds.maxY == 1024 && imageMoved.images![0].id == placed.id, "Image movement clamps to page bounds and preserves identity")
+let imageResized = imageSelection.resizing(modernPage, to: InkPoint(x: 500, y: 400)).images![0]
+check(imageResized.width == 400 && imageResized.height == 200, "Image resize preserves aspect ratio")
+let textSelection = PageSelection(texts: [flexible.id])
+let textResized = textSelection.resizing(modernPage, to: InkPoint(x: 450, y: 400)).texts[0]
+check(textResized.width == 100 && textResized.size == 24 && textResized.text == flexible.text, "Single text resize changes wrapping width without stretching its font")
+check(modernPage.text(at: InkPoint(x: 560, y: 310)) == nil && modernPage.text(at: InkPoint(x: 400, y: 310))?.id == flexible.id, "Text hit testing follows saved dimensions")
+let deleted = imageSelection.removing(from: modernPage)
+check(deleted.images!.isEmpty && deleted.strokes == modernPage.strokes && deleted.texts == modernPage.texts, "Deleting a selection preserves unselected content")
+let selectionOnly = imageSelection.contents(of: modernPage)
+check(selectionOnly.strokes.isEmpty && selectionOnly.texts.isEmpty && selectionOnly.images == [placed], "Copy selection includes only selected objects")
+check(modernBook.selectingPages([0]).assets == [imageAsset], "Selected-page exports retain assets used by placed images")
+var pasted = Notebook(); pasted.appendImported(modernBook)
+check(pasted.pages.last!.images!.first!.assetID != imageAsset.id && pasted.assets!.first!.id == pasted.pages.last!.images!.first!.assetID, "Notebook import remaps placed-image asset references")
+check((try? Notebook.decode(pasted.encoded())) != nil, "Imported version 3 content remains valid")
+modernBook.pages[0].images![0].assetID = UUID()
+check((try? Notebook.decode(modernBook.encoded())) == nil, "Missing placed-image assets are rejected")
+modernBook = Notebook(version: 3, pages: [modernPage], assets: [imageAsset]); modernBook.pages[0].texts[0].boxWidth = -1
+check((try? Notebook.decode(modernBook.encoded())) == nil, "Invalid text dimensions are rejected")
+modernBook = Notebook(version: 3, pages: [modernPage], assets: [imageAsset]); modernBook.pages[0].images![0].width = .infinity
+check((try? modernBook.encoded()) == nil, "Nonfinite image geometry cannot be saved")
