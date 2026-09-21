@@ -10,7 +10,7 @@ struct NotebookDocument: FileDocument, Equatable {
     let loadID = UUID()
     var notebook: Notebook
 
-    init(notebook: Notebook = Notebook()) { self.notebook = notebook }
+    init(notebook: Notebook = Notebook.newNotebook()) { self.notebook = notebook }
     init(configuration: ReadConfiguration) throws {
         guard let data = configuration.file.regularFileContents else { throw CocoaError(.fileReadCorruptFile) }
         notebook = try Notebook.decode(data)

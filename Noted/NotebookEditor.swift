@@ -57,6 +57,7 @@ struct NotebookEditor: View {
     @State private var liveInk = LiveInk()
     @State private var gesturePreview: NotePage?
     @State private var resizingSelection = false
+    @GestureState private var resizeHandleActive = false
     @State private var backedUpForModernEdit = false
     @State private var lastErase: InkPoint?
     @State private var showImageFile = false
@@ -151,6 +152,9 @@ struct NotebookEditor: View {
 
             }
             .navigationTitle(document.notebook.title)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     if let onClose { Button("Notebooks") { clearSelection(); onClose() } }
@@ -290,7 +294,9 @@ struct NotebookEditor: View {
             Color(red: 0.92, green: 0.93, blue: 0.91)
             ForEach(Array(document.notebook.pages.enumerated()), id: \.element.id) { index, item in
                 let origin = viewport.pageOrigin(at: index, in: size)
-                if origin.y < size.height && origin.y + 1024 * scale > 0 {
+                // Keep nearby pages mounted before they scroll into view.
+                let preload = size.height * 0.6
+                if origin.y < size.height + preload && origin.y + 1024 * scale > -preload {
                     ZStack(alignment: .topLeading) {
                         let displayed = gesturePage == item.id ? (gesturePreview ?? item) : item
                         PaperCanvas(page: displayed, pending: nil,
@@ -346,8 +352,28 @@ struct NotebookEditor: View {
                     .position(x: min(size.width-110, max(110, origin.x + bounds.midX*scale)),
                               y: min(size.height-26, max(26, origin.y + bounds.minY*scale-30)))
             }
+            if tool == .select, selection.count > 0,
+               let index = document.notebook.pages.firstIndex(where: { $0.id == selectionPage }),
+               let bounds = selection.bounds(in: gesturePage == selectionPage ? (gesturePreview ?? document.notebook.pages[index]) : document.notebook.pages[index]) {
+                let origin = viewport.pageOrigin(at: index, in: size)
+                Circle().fill(.white).overlay(Circle().stroke(accent, lineWidth: 2))
+                    .frame(width: 20, height: 20)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+                    .position(x: origin.x + bounds.maxX*scale, y: origin.y + bounds.maxY*scale)
+                    .accessibilityLabel("Resize selection")
+                    .allowsHitTesting(gestureBefore == nil || resizingSelection)
+                    .highPriorityGesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("notebookCanvas"))
+                        .updating($resizeHandleActive) { _, active, _ in active = true }
+                        .onChanged { value in resizeSelection(translation: value.translation, pageIndex: index, scale: scale) }
+                        .onEnded { _ in finish(false) })
+            }
         }.frame(width: size.width, height: size.height)
+            .coordinateSpace(name: "notebookCanvas")
             .contentShape(Rectangle()).clipped()
+            .onChange(of: resizeHandleActive) { _, active in
+                // Cancellation can skip onEnded. Normal completion already clears this state.
+                if !active && resizingSelection { finish(true) }
+            }
     }
     private func scrollPages(_ delta: CGSize, size: CGSize, momentum: Bool = false) {
         if textEdit != nil { clearSelection() }
@@ -373,12 +399,12 @@ struct NotebookEditor: View {
     private var zoomControls: some View {
         HStack(spacing: 2) {
             Button { changeZoom(1 / 1.25) } label: { Image(systemName: "minus.magnifyingglass").frame(width: 32, height: 42) }
-                .disabled(zoom <= 1).accessibilityLabel("Zoom out")
+                .disabled(zoom <= NotebookViewport.minimumZoom).accessibilityLabel("Zoom out")
             Button("\(Int((zoom * 100).rounded()))%") { fitCurrentPage() }
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .frame(minWidth: 42, minHeight: 42).help("Fit page")
             Button { changeZoom(1.25) } label: { Image(systemName: "plus.magnifyingglass").frame(width: 32, height: 42) }
-                .disabled(zoom >= 4).accessibilityLabel("Zoom in")
+                .disabled(zoom >= NotebookViewport.maximumZoom).accessibilityLabel("Zoom in")
         }.buttonStyle(.plain)
     }
     private func changeZoom(_ factor: Double) {
@@ -686,14 +712,33 @@ struct NotebookEditor: View {
         tool = .select; panMode = false; selection = PageSelection(images: [item.id]); selectionPage = page.id
     }
 
+    private func prepareModernEdit() -> Bool {
+        guard !backedUpForModernEdit && document.notebook.version < 3 else { return true }
+        do { try NotebookStorage.backup(document.notebook); backedUpForModernEdit = true; return true }
+        catch { recoveryMessage = "A safety copy couldn’t be saved: \(error.localizedDescription)"; showRecovery = true; return false }
+    }
+    private func resizeSelection(translation: CGSize, pageIndex index: Int, scale: Double) {
+        guard document.notebook.pages.indices.contains(index), scale > 0 else { return }
+        if !resizingSelection {
+            finish(false)
+            guard prepareModernEdit() else { return }
+            navigationToken += 1
+            selectedPage = document.notebook.pages[index].id
+            gesturePage = selectedPage; gestureBefore = document.notebook
+            resizingSelection = true; movingSelection = false
+            textEdit = nil; selectedText = nil
+        }
+        guard let original = gestureBefore?.pages.first(where: { $0.id == gesturePage }),
+              let bounds = selection.bounds(in: original) else { return }
+        let corner = InkPoint(x: bounds.maxX + translation.width/scale, y: bounds.maxY + translation.height/scale)
+        gesturePreview = selection.resizing(original, to: corner)
+    }
+
     private func begin(_ p: InkPoint) {
         guard (0...768).contains(p.x), (0...1024).contains(p.y) else { return }
         finish(false)
         if tool != .select { clearSelection() }
-        if !backedUpForModernEdit && document.notebook.version < 3 && (tool == .pencil || tool == .text || tool == .select) {
-            do { try NotebookStorage.backup(document.notebook); backedUpForModernEdit = true }
-            catch { recoveryMessage = "A safety copy couldn’t be saved: \(error.localizedDescription)"; showRecovery = true; return }
-        }
+        if (tool == .pencil || tool == .text || tool == .select) && !prepareModernEdit() { return }
         gestureBefore = document.notebook; gesturePage = page.id; startPoint = p
         switch tool {
         case .pen, .pencil:
@@ -922,8 +967,6 @@ private struct SelectionOverlay: View {
                 let box = Path(roundedRect: rect, cornerRadius: 4)
                 context.fill(box, with: .color(inkColor("green").opacity(0.06)))
                 context.stroke(box, with: .color(inkColor("green")), style: StrokeStyle(lineWidth: 1.5, dash: [6, 4]))
-                let handle = Path(ellipseIn: CGRect(x: bounds.maxX*scale-7, y: bounds.maxY*scale-7, width: 14, height: 14))
-                context.fill(handle, with: .color(.white)); context.stroke(handle, with: .color(inkColor("green")), lineWidth: 2)
             }
             if let first = lasso.first {
                 var path = Path()

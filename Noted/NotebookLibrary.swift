@@ -114,7 +114,7 @@ struct NotebookLibrary: View {
                     Text("Saved on this device. You can move it to another location later.").font(.callout).foregroundStyle(.secondary)
                     HStack { Button("Cancel") { showNew = false }; Spacer(); Button("Create") {
                         do {
-                            let book = Notebook(title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled notebook" : title, pages: [NotePage(paper: paper)])
+                            let book = Notebook.newNotebook(title: title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Untitled notebook" : title, paper: paper)
                             let url = try NotebookStorage.create(book); showNew = false; refresh()
                             DispatchQueue.main.async { open(url) }
                         } catch { self.error = error.localizedDescription }

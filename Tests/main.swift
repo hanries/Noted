@@ -53,7 +53,10 @@ viewport.pan(CGSize(width: 1e9, height: -1e9), in: viewportSize)
 let boundedOrigin = viewport.origin(in: viewportSize)
 check(boundedOrigin.x <= 22.001 && boundedOrigin.y + 1024 * scale >= viewportSize.height - 22.001, "Panning cannot lose the page beyond the viewport")
 viewport.magnify(0.001, at: center, in: viewportSize)
-check(viewport.zoom == 1 && viewport.offset == .zero, "Zooming back to fit recenters the page")
+check(viewport.zoom == NotebookViewport.minimumZoom && viewport.offset == .zero, "Zooming out reaches 40 percent and keeps a single page centered")
+let atMinimum = viewport
+viewport.magnify(0.5, at: offsetAnchor, in: viewportSize)
+check(viewport == atMinimum, "Continuing to pinch at minimum zoom cannot shift the page")
 viewport.magnify(100, at: center, in: viewportSize)
 check(viewport.zoom == 4, "Zoom has a bounded maximum")
 let validViewport = viewport
@@ -78,7 +81,7 @@ let pointOnSecond = InkPoint(x: secondOrigin.x + 150 * scrolling.scale(in: viewp
 check(scrolling.pageIndex(at: pointOnSecond, in: viewportSize) == 1, "A touch targets the visible second page")
 let secondLocal = scrolling.pagePoint(pointOnSecond, at: 1, in: viewportSize)
 check(abs(secondLocal.x - 150) < 0.0001 && abs(secondLocal.y - 200) < 0.0001, "Visible page input maps to local notebook coordinates")
-let gap = InkPoint(x: viewportSize.width / 2, y: secondOrigin.y + 1024 * scrolling.scale(in: viewportSize) + 12)
+let gap = InkPoint(x: viewportSize.width / 2, y: secondOrigin.y + 1024 * scrolling.scale(in: viewportSize) + NotebookViewport.pageGap / 2)
 check(scrolling.pageIndex(at: gap, in: viewportSize) == nil, "Tapping the gap between pages cannot create text or ink")
 let anchoredLocal = scrolling.pagePoint(centerPoint, at: 1, in: viewportSize)
 scrolling.magnify(1.5, at: center, in: viewportSize)
@@ -87,6 +90,26 @@ check(abs(anchoredLocal.y - anchoredAfter.y) < 0.0001, "Pinching a later page pr
 check(scrolling.pan(CGSize(width: 0, height: -10), in: viewportSize) == 0, "Scrolling inside existing pages does not request another page")
 check(scrolling.pan(CGSize(width: 0, height: -100000), in: viewportSize) > 0, "Scrolling beyond the final page reports downward overflow")
 check(scrolling.pan(CGSize(width: 0, height: 50), in: viewportSize) == 0, "Scrolling back up never requests a new page")
+
+let tenPages = Notebook.newNotebook(title: "Lecture notes", paper: .grid)
+check(tenPages.pages.count == 10 && Set(tenPages.pages.map(\.id)).count == 10, "New notebooks start with ten distinct pages")
+check(tenPages.title == "Lecture notes" && tenPages.pages.allSatisfy { $0.paper == .grid && $0.strokes.isEmpty && $0.texts.isEmpty && $0.background == nil && ($0.images ?? []).isEmpty }, "Every initial page uses the chosen paper and starts empty")
+check((try? Notebook.decode(tenPages.encoded())) == tenPages, "All ten initial pages survive save and reopen")
+check((try? Notebook.decode(Notebook().encoded()))?.pages.count == 1, "Opening an existing short notebook does not add blank pages")
+
+var overview = NotebookViewport(pageCount: 10)
+overview.showPage(5, in: viewportSize)
+let beforeZoomOut = overview.pagePoint(centerPoint, at: 5, in: viewportSize)
+overview.magnify(0.5, at: center, in: viewportSize)
+let afterZoomOut = overview.pagePoint(centerPoint, at: 5, in: viewportSize)
+check(overview.zoom == 0.5 && abs(beforeZoomOut.y-afterZoomOut.y) < 0.0001, "Zooming below fit keeps the same position on a later page")
+let overviewScale = overview.scale(in: viewportSize)
+let overviewGap = overview.pageOrigin(at: 6, in: viewportSize).y - overview.pageOrigin(at: 5, in: viewportSize).y - 1024*overviewScale
+check(abs(overviewGap - 12) < 0.0001, "Pages keep a small twelve-point gap when zoomed out")
+overview.pan(CGSize(width: 0, height: 1e9), in: viewportSize)
+check(overview.pageOrigin(at: 0, in: viewportSize).y == 22, "Scrolling to the start keeps a zoomed-out stack near the top")
+overview.pan(CGSize(width: 0, height: -1e9), in: viewportSize)
+check(abs(overview.pageOrigin(at: 9, in: viewportSize).y + 1024*overviewScale - (viewportSize.height-22)) < 0.0001, "The final page remains reachable when zoomed out")
 
 var textPage = NotePage()
 let textID = UUID()
@@ -167,6 +190,15 @@ let imageMoved = imageSelection.moving(modernPage, by: CGSize(width: 1000, heigh
 check(imageMoved.images![0].bounds.maxX == 768 && imageMoved.images![0].bounds.maxY == 1024 && imageMoved.images![0].id == placed.id, "Image movement clamps to page bounds and preserves identity")
 let imageResized = imageSelection.resizing(modernPage, to: InkPoint(x: 500, y: 400)).images![0]
 check(imageResized.width == 400 && imageResized.height == 200, "Image resize preserves aspect ratio")
+let horizontalResize = imageSelection.resizing(modernPage, to: InkPoint(x: 400, y: 300)).images![0]
+let verticalResize = imageSelection.resizing(modernPage, to: InkPoint(x: 300, y: 400)).images![0]
+check(horizontalResize.width > placed.width && verticalResize.height > placed.height, "Horizontal-only and vertical-only corner drags both enlarge a selection")
+check(abs(horizontalResize.width/horizontalResize.height - 2) < 0.0001 && abs(verticalResize.width/verticalResize.height - 2) < 0.0001, "Axis-aligned resizing preserves image proportions")
+let imageShrunk = imageSelection.resizing(modernPage, to: InkPoint(x: 200, y: 250)).images![0]
+check(imageShrunk.width == 100 && imageShrunk.height == 50 && imageShrunk.id == placed.id, "Dragging the corner inward shrinks the same editable image")
+let resizedGroup = group.resizing(selectionPage, to: InkPoint(x: 600, y: 500))
+check(resizedGroup.strokes[0].points[0].pressure == insideStroke.points[0].pressure && resizedGroup.strokes[0].id == insideStroke.id && resizedGroup.strokes[2] == outsideStroke && resizedGroup.texts[1] == outsideText && selectionPage.strokes[0] == insideStroke, "Group resizing preserves pressure, identities, untouched objects and the undo snapshot")
+check((try? Notebook.decode(Notebook(pages: [resizedGroup]).encoded()))?.pages == [resizedGroup], "Resized mixed selections remain editable after save and reopen")
 let textSelection = PageSelection(texts: [flexible.id])
 let textResized = textSelection.resizing(modernPage, to: InkPoint(x: 450, y: 400)).texts[0]
 check(textResized.width == 100 && textResized.size == 24 && textResized.text == flexible.text, "Single text resize changes wrapping width without stretching its font")

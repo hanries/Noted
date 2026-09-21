@@ -18,7 +18,12 @@ struct PointerSurface: UIViewRepresentable {
         if view.inputKey != inputKey { view.cancelInk(); view.stopMomentum() }
         view.inputKey = inputKey
         view.pencilOnly = pencilOnly; view.panMode = panMode
-        view.pan.minimumNumberOfTouches = panMode ? 1 : 2
+        let requiredTouches = panMode ? 1 : 2
+        // SwiftUI updates this view on every viewport change. Leave recognizer
+        // configuration alone while a pan/pinch is already in flight.
+        if view.pan.minimumNumberOfTouches != requiredTouches {
+            view.pan.minimumNumberOfTouches = requiredTouches
+        }
         view.began = began; view.moved = moved; view.ended = ended
         view.panned = panned; view.magnified = magnified; view.pencilTapped = pencilTapped
     }
@@ -35,6 +40,9 @@ struct PointerSurface: UIViewRepresentable {
         var active: UITouch?
         lazy var pan = UIPanGestureRecognizer(target: self, action: #selector(panPage(_:)))
         lazy var pinch = UIPinchGestureRecognizer(target: self, action: #selector(zoomPage(_:)))
+        private var panIncludedPinch = false
+        private var isPinching: Bool { pinch.state == .began || pinch.state == .changed }
+        private var isPanning: Bool { pan.state == .began || pan.state == .changed }
 
         override init(frame: CGRect) {
             super.init(frame: frame)
@@ -57,14 +65,26 @@ struct PointerSurface: UIViewRepresentable {
             (gestureRecognizer === pan && other === pinch) || (gestureRecognizer === pinch && other === pan)
         }
         @objc func panPage(_ gesture: UIPanGestureRecognizer) {
-            if gesture.state == .began { stopMomentum(); cancelInk() }
-            if gesture.state == .began || gesture.state == .changed {
-                let delta = gesture.translation(in: self)
-                panned(CGSize(width: delta.x, height: delta.y), false); gesture.setTranslation(.zero, in: self)
+            if gesture.state == .began {
+                stopMomentum(); cancelInk()
+                panIncludedPinch = isPinching
             }
-            if gesture.state == .ended && pinch.state != .changed && pinch.state != .began {
+            if isPinching { panIncludedPinch = true }
+            if gesture.state == .began || gesture.state == .changed || gesture.state == .ended {
+                let delta = gesture.translation(in: self)
+                gesture.setTranslation(.zero, in: self)
+                // The second argument suppresses page creation during momentum
+                // and pinch navigation. Moving a pinch's midpoint must not add
+                // a page when zooming near the bottom of the notebook.
+                if delta.x.isFinite && delta.y.isFinite {
+                    panned(CGSize(width: delta.x, height: delta.y), panIncludedPinch)
+                }
+            }
+            // Recognizers can finish in either order. Remember that this pan
+            // belonged to a pinch even when the pinch has already ended.
+            if gesture.state == .ended && !panIncludedPinch {
                 velocity = gesture.velocity(in: self)
-                if hypot(velocity.x, velocity.y) > 80 {
+                if velocity.x.isFinite && velocity.y.isFinite && hypot(velocity.x, velocity.y) > 80 {
                     let target = MomentumTarget(); target.owner = self
                     displayLink = CADisplayLink(target: target, selector: #selector(MomentumTarget.tick(_:)))
                     displayLink?.add(to: .main, forMode: .common)
@@ -91,9 +111,16 @@ struct PointerSurface: UIViewRepresentable {
         override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { stopMomentum(); cancelInk() } }
 
         @objc func zoomPage(_ gesture: UIPinchGestureRecognizer) {
-            if gesture.state == .began { stopMomentum(); cancelInk() }
+            if gesture.state == .began {
+                stopMomentum(); cancelInk(); panIncludedPinch = true
+            }
             if gesture.state == .began || gesture.state == .changed {
-                magnified(Double(gesture.scale), gesture.location(in: self)); gesture.scale = 1
+                let factor = Double(gesture.scale)
+                let anchor = gesture.location(in: self)
+                gesture.scale = 1
+                if factor.isFinite && factor > 0 && anchor.x.isFinite && anchor.y.isFinite {
+                    magnified(factor, anchor)
+                }
             }
         }
         func pencilInteractionDidTap(_ interaction: UIPencilInteraction) { handlePencilTap() }
@@ -119,7 +146,7 @@ struct PointerSurface: UIViewRepresentable {
                 if active?.type != .pencil { cancelInk() }
                 return
             }
-            guard !panMode, active == nil, pan.state != .changed, pinch.state != .changed,
+            guard !panMode, active == nil, !isPanning, !isPinching,
                   let touch = touches.first(where: { !pencilOnly || $0.type == .pencil }) else { return }
             active = touch; began(point(touch))
         }

@@ -15,7 +15,14 @@ No additional recognition, audio, collaboration or custom cloud integration in t
 
 ## Build status
 
-Steps 1–4 are implemented as a first checkpoint build. Step 5 passed 75 model checks, 16 native transfer checks, and both platform builds. Usability, real Pencil behavior and provider round trips await the user's manual checks. Do not equate these builds/tests with a smoothness sign-off.
+Steps 1–4 are implemented. The September 21 feedback checkpoint adds ten initial pages, smaller gaps and neighboring-page preloading; zoom down to 40%; a direct resize handle; export page sliders and native sharing. Step 5 passed 89 model checks, 16 native transfer checks, and both platform builds. Usability, real Pencil behavior and provider round trips await the user's manual checks. Do not equate these builds/tests with a smoothness sign-off.
+
+## September 21 feedback checkpoint
+
+1. **Pages:** create a notebook and confirm ten pages using the chosen template. Scroll across several page boundaries at normal and reduced zoom. Existing notebooks should keep their page counts. Deliberate scrolling past the last page still adds another.
+2. **Pinch:** zoom from 100% down to 40%, back to 200%, and down again on an early and a later page. Try moving both fingers while pinching and lifting them in either order. The page should remain near the pinch location, except where the notebook edge limits movement; pinching should not add pages or launch a fling.
+3. **Resize:** circle several strokes, drag the lower-right handle horizontally, vertically and diagonally, then shrink them. Try at 50% and 200% using Pencil and touch. Undo/Redo and reopen to confirm the content remains editable. Also try an image and a single text item.
+4. **Export:** choose Page range, drag the start/end sliders and check the previews. Share PDF, PNG and Noted; the system sharing options should appear. Cancel once, then try a destination of your choice and confirm the selected pages arrive. On Mac, also check Save a copy.
 
 ## Manual checkpoints
 

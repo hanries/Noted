@@ -124,6 +124,9 @@ enum NotebookError: Error { case invalidFormat }
 
 // Viewport state never enters the document or undo history.
 struct NotebookViewport: Equatable {
+    static let minimumZoom = 0.4
+    static let maximumZoom = 4.0
+    static let pageGap = 12.0
     var zoom: Double = 1
     var offset: CGSize = .zero
     var pageCount = 1
@@ -131,16 +134,20 @@ struct NotebookViewport: Equatable {
     func scale(in size: CGSize) -> Double {
         max(0.1, min((size.width - 44) / 768, (size.height - 44) / 1024)) * zoom
     }
-    func origin(in size: CGSize) -> CGPoint {
+    private func restingOrigin(in size: CGSize) -> CGPoint {
         let s = scale(in: size)
-        return CGPoint(x: (size.width - 768 * s) / 2 + offset.width,
-                       y: (size.height - 1024 * s) / 2 + offset.height)
+        return CGPoint(x: (size.width - 768 * s) / 2,
+                       y: pageCount > 1 ? 22 : (size.height - 1024 * s) / 2)
+    }
+    func origin(in size: CGSize) -> CGPoint {
+        let resting = restingOrigin(in: size)
+        return CGPoint(x: resting.x + offset.width, y: resting.y + offset.height)
     }
     func pagePoint(_ point: InkPoint, in size: CGSize) -> InkPoint {
         let o = origin(in: size), s = scale(in: size)
         return InkPoint(x: (point.x - o.x) / s, y: (point.y - o.y) / s, pressure: point.pressure)
     }
-    func pageStride(in size: CGSize) -> Double { 1024 * scale(in: size) + 24 }
+    func pageStride(in size: CGSize) -> Double { 1024 * scale(in: size) + Self.pageGap }
     func pageOrigin(at index: Int, in size: CGSize) -> CGPoint {
         let first = origin(in: size)
         return CGPoint(x: first.x, y: first.y + Double(index) * pageStride(in: size))
@@ -169,24 +176,34 @@ struct NotebookViewport: Equatable {
     }
     mutating func magnify(_ factor: Double, at anchor: CGPoint, in size: CGSize) {
         guard factor.isFinite, factor > 0 else { return }
+        let nextZoom = min(Self.maximumZoom, max(Self.minimumZoom, zoom * factor))
+        guard nextZoom != zoom else { return }
         let oldOrigin = origin(in: size)
         let anchoredPage = max(0, min(pageCount - 1, Int(floor((anchor.y - oldOrigin.y) / pageStride(in: size)))))
         let p = pagePoint(InkPoint(x: anchor.x, y: anchor.y), at: anchoredPage, in: size)
-        zoom = min(4, max(1, zoom * factor))
-        let s = scale(in: size)
-        offset = CGSize(width: anchor.x - p.x * s - (size.width - 768 * s) / 2,
-                        height: anchor.y - p.y * s - Double(anchoredPage) * pageStride(in: size) - (size.height - 1024 * s) / 2)
+        zoom = nextZoom
+        let s = scale(in: size), resting = restingOrigin(in: size)
+        offset = CGSize(width: anchor.x - p.x * s - resting.x,
+                        height: anchor.y - p.y * s - Double(anchoredPage) * pageStride(in: size) - resting.y)
         clamp(in: size)
     }
     mutating func clamp(in size: CGSize) {
         let s = scale(in: size)
         let x = max(0, (768 * s - size.width) / 2 + 22)
-        let y = max(0, (1024 * s - size.height) / 2 + 22)
-        offset.width = min(x, max(-x, offset.width)); offset.height = min(y, max(-y - Double(max(0, pageCount - 1)) * pageStride(in: size), offset.height))
+        let restingY = restingOrigin(in: size).y
+        let totalHeight = 1024 * s + Double(max(0, pageCount - 1)) * pageStride(in: size)
+        let minimumY = min(0, size.height - 22 - restingY - totalHeight)
+        let maximumY = max(0, 22 - restingY)
+        offset.width = min(x, max(-x, offset.width))
+        offset.height = min(maximumY, max(minimumY, offset.height))
     }
 }
 
 extension Notebook {
+    // Only creation uses this factory; reading existing files never adds blank pages.
+    static func newNotebook(title: String = "Untitled notebook", paper: Paper = .ruled) -> Notebook {
+        Notebook(title: title, pages: (0..<10).map { _ in NotePage(paper: paper) })
+    }
     @discardableResult
     mutating func appendPageAfterScroll(after pageID: UUID) -> Bool {
         guard let last = pages.last, last.id == pageID else { return false }
@@ -390,7 +407,9 @@ extension PageSelection {
             copy.texts[index].boxHeight = max(44, min(1024 - r.minY, point.y - r.minY))
             return copy
         }
-        var factor = max(0.1, min((point.x-r.minX)/r.width, (point.y-r.minY)/r.height))
+        // Project onto the box diagonal so either horizontal or vertical pulls resize.
+        let diagonalSquared = r.width*r.width + r.height*r.height
+        var factor = max(0.1, ((point.x-r.minX)*r.width + (point.y-r.minY)*r.height)/diagonalSquared)
         factor = min(factor, (768-r.minX)/r.width, (1024-r.minY)/r.height)
         for text in page.texts where texts.contains(text.id) { factor = min(factor, 200/text.size); factor = max(factor, 1/text.size) }
         for stroke in page.strokes where strokes.contains(stroke.id) { factor = min(factor, 100/stroke.width) }
